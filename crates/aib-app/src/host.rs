@@ -14,6 +14,7 @@ const CHROME_HEIGHT: i32 = 84;
 const APP_NAME: &str = "AI Browser";
 const SEARCH_TEMPLATE: &str = "https://www.google.com/search?q={q}";
 const DARK_BG: u32 = 0xFF1E1F22;
+const MAX_PAGE_TEXT_CHARS: usize = 80_000;
 
 static UI_URL: OnceLock<String> = OnceLock::new();
 static START_URL: OnceLock<Option<String>> = OnceLock::new();
@@ -30,12 +31,23 @@ struct Tab {
     info: TabInfo,
 }
 
+struct AgentGuard {
+    tab_id: TabId,
+    lease_id: String,
+    allowed_url: String,
+    blocked: Option<String>,
+}
+
 #[derive(Default)]
 struct HostState {
     window: Option<Window>,
     content: Option<Panel>,
+    content_layout: Option<BoxLayout>,
     chrome_view: Option<BrowserView>,
     chrome_browser: Option<Browser>,
+    assistant_view: Option<BrowserView>,
+    assistant_browser: Option<Browser>,
+    assistant_open: bool,
     tabs: Vec<Tab>,
     active: Option<TabId>,
     next_id: TabId,
@@ -44,6 +56,7 @@ struct HostState {
     live_browsers: Vec<Browser>,
     /// Browser ids of tabs whose view `close_tab` detached and which are now closing.
     detached_tabs: Vec<i32>,
+    agent_guard: Option<AgentGuard>,
 }
 
 thread_local! {
@@ -72,7 +85,14 @@ fn tab_id_for_browser(id: i32) -> Option<TabId> {
 }
 
 fn is_chrome_browser(id: i32) -> bool {
-    with_state(|s| s.chrome_browser.as_ref().is_some_and(|b| b.identifier() == id))
+    with_state(|s| {
+        s.chrome_browser
+            .as_ref()
+            .is_some_and(|b| b.identifier() == id)
+            || s.assistant_browser
+                .as_ref()
+                .is_some_and(|b| b.identifier() == id)
+    })
 }
 
 fn emit_tabs() {
@@ -120,11 +140,170 @@ fn active_or(tab_id: Option<TabId>) -> Option<TabId> {
 
 fn tab_browser(tab_id: Option<TabId>) -> Option<Browser> {
     let id = active_or(tab_id)?;
-    with_state(|s| s.tabs.iter().find(|t| t.id == id).and_then(|t| t.browser.clone()))
+    with_state(|s| {
+        s.tabs
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.browser.clone())
+    })
 }
 
 fn tab_view(id: TabId) -> Option<BrowserView> {
     with_state(|s| s.tabs.iter().find(|t| t.id == id).map(|t| t.view.clone()))
+}
+
+pub fn handle_agent(request: crate::cdp::HostRequest) {
+    use crate::cdp::HostRequest;
+    if let HostRequest::Cancel { id } = request {
+        crate::cdp::cancel(id);
+        return;
+    }
+    if let HostRequest::End { tab_id, lease_id } = request {
+        with_state(|s| {
+            if s.agent_guard
+                .as_ref()
+                .is_some_and(|g| g.tab_id == tab_id && g.lease_id == lease_id)
+            {
+                s.agent_guard = None;
+            }
+        });
+        return;
+    }
+    let (tab_id, expected) = match &request {
+        HostRequest::Inspect { tab_id, .. } => (*tab_id, None),
+        HostRequest::Call {
+            tab_id,
+            expected_url,
+            ..
+        }
+        | HostRequest::Navigate {
+            tab_id,
+            expected_url,
+            ..
+        }
+        | HostRequest::Begin {
+            tab_id,
+            expected_url,
+            ..
+        } => (Some(*tab_id), Some(expected_url.as_str())),
+        HostRequest::Cancel { .. } | HostRequest::End { .. } => unreachable!(),
+    };
+    let target = with_state(|s| {
+        if s.closing {
+            return None;
+        }
+        let id = tab_id.or(s.active)?;
+        if s.active != Some(id) {
+            return None;
+        }
+        s.tabs
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.browser.clone().map(|b| (t.info.clone(), b)))
+    });
+    let result = target
+        .ok_or_else(|| anyhow::anyhow!("Task stopped: its tab was closed or you switched tabs."))
+        .and_then(|(info, browser)| {
+            if let Some(blocked) = with_state(|s| {
+                s.agent_guard
+                    .as_ref()
+                    .filter(|g| g.tab_id == info.id)
+                    .and_then(|g| g.blocked.clone())
+            }) {
+                anyhow::bail!("{blocked}");
+            }
+            if let Some(expected) = expected
+                && (info.url != expected || info.loading)
+            {
+                anyhow::bail!("The task page changed or is still loading. Start again when ready.");
+            }
+            if let Some(ui) = UI_URL.get()
+                && url::Url::parse(&info.url).ok().is_some_and(|page| {
+                    url::Url::parse(ui)
+                        .ok()
+                        .is_some_and(|trusted| page.origin() == trusted.origin())
+                })
+            {
+                anyhow::bail!("The agent cannot read or navigate the trusted browser UI");
+            }
+            Ok((info, browser))
+        });
+    match request {
+        HostRequest::Begin {
+            tab_id,
+            expected_url,
+            lease_id,
+            reply,
+        } => {
+            if reply.is_closed() {
+                return;
+            }
+            let _ = reply.send(result.map(|_| {
+                with_state(|s| {
+                    s.agent_guard = Some(AgentGuard {
+                        tab_id,
+                        lease_id,
+                        allowed_url: expected_url,
+                        blocked: None,
+                    })
+                });
+                serde_json::Value::Null
+            }));
+        }
+        HostRequest::Inspect { reply, .. } => {
+            let _ = reply
+                .send(result.and_then(|(info, _)| serde_json::to_value(info).map_err(Into::into)));
+        }
+        HostRequest::Call {
+            id,
+            method,
+            params,
+            reply,
+            ..
+        } => match result {
+            Ok((_, browser)) => crate::cdp::dispatch(browser, id, method, params, reply),
+            Err(error) => {
+                let _ = reply.send(Err(error));
+            }
+        },
+        HostRequest::Navigate {
+            tab_id,
+            url,
+            lease_id,
+            reply,
+            ..
+        } => {
+            if reply.is_closed() {
+                return;
+            }
+            let result = result.and_then(|(_, browser)| {
+                crate::agent::validate_navigation(&url)?;
+                if let Some(ui) = UI_URL.get()
+                    && url::Url::parse(&url)?.origin() == url::Url::parse(ui)?.origin()
+                {
+                    anyhow::bail!("Navigation to the trusted browser UI is forbidden");
+                }
+                let frame = browser
+                    .main_frame()
+                    .ok_or_else(|| anyhow::anyhow!("Task frame is unavailable"))?;
+                with_state(|s| {
+                    let guard = s
+                        .agent_guard
+                        .as_mut()
+                        .filter(|g| g.tab_id == tab_id && g.lease_id == lease_id)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("Task navigation guard is no longer active")
+                        })?;
+                    guard.allowed_url = url.clone();
+                    Ok::<_, anyhow::Error>(())
+                })?;
+                frame.load_url(Some(&CefString::from(url.as_str())));
+                Ok(serde_json::Value::Null)
+            });
+            let _ = reply.send(result);
+        }
+        HostRequest::Cancel { .. } | HostRequest::End { .. } => unreachable!(),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -135,6 +314,9 @@ pub fn handle_command(cmd: Command) {
     debug_assert_ne!(currently_on(ThreadId::UI), 0);
     if with_state(|s| s.closing) {
         return;
+    }
+    if cmd.interrupts_agent() {
+        with_state(|s| s.agent_guard = None);
     }
     match cmd {
         Command::NewTab { url } => {
@@ -198,6 +380,8 @@ pub fn handle_command(cmd: Command) {
                 );
             }
         }
+        Command::ToggleAssistant => toggle_assistant(),
+        Command::GetPageText { request_id } => get_page_text(request_id),
     }
 }
 
@@ -208,7 +392,10 @@ fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
         s.next_id += 1;
         id
     });
-    let url = url.filter(|u| !u.is_empty()).unwrap_or("about:blank").to_string();
+    let url = url
+        .filter(|u| !u.is_empty())
+        .unwrap_or("about:blank")
+        .to_string();
 
     let mut client = client();
     let mut delegate = TabViewDelegate::new(id);
@@ -229,7 +416,11 @@ fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
             browser: None,
             info: TabInfo {
                 id,
-                url: if url == "about:blank" { String::new() } else { url.clone() },
+                url: if url == "about:blank" {
+                    String::new()
+                } else {
+                    url.clone()
+                },
                 title: "New Tab".into(),
                 loading: true,
                 ..Default::default()
@@ -253,22 +444,44 @@ fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
 }
 
 fn activate_tab(id: TabId) {
-    let (views, content) = with_state(|s| {
+    let (views, content, layout, assistant_open, assistant_view) = with_state(|s| {
         if !s.tabs.iter().any(|t| t.id == id) {
-            return (Vec::new(), None);
+            return (Vec::new(), None, None, false, None);
         }
         s.active = Some(id);
         (
-            s.tabs.iter().map(|t| (t.id, t.view.clone())).collect::<Vec<_>>(),
+            s.tabs
+                .iter()
+                .map(|t| (t.id, t.view.clone()))
+                .collect::<Vec<_>>(),
             s.content.clone(),
+            s.content_layout.clone(),
+            s.assistant_open,
+            s.assistant_view.clone(),
         )
     });
     let Some(content) = content else { return };
     for (tid, view) in &views {
         let visible = *tid == id;
-        View::from(view).set_visible(visible as i32);
+        let mut child = View::from(view);
+        child.set_visible(visible as i32);
+        if let Some(layout) = &layout {
+            layout.set_flex_for_view(Some(&mut child), if visible { 1 } else { 0 });
+        }
         if let Some(host) = view.browser().and_then(|b| b.host()) {
             host.was_hidden((!visible) as i32);
+        }
+    }
+    if assistant_open {
+        if let (Some(layout), Some(sidebar)) = (&layout, &assistant_view) {
+            let mut child = View::from(sidebar);
+            child.set_visible(1);
+            layout.set_flex_for_view(Some(&mut child), 0);
+        }
+        if let Some(sidebar) = assistant_view {
+            if let Some(host) = sidebar.browser().and_then(|browser| browser.host()) {
+                host.was_hidden(0);
+            }
         }
     }
     content.layout();
@@ -279,19 +492,105 @@ fn activate_tab(id: TabId) {
     update_window_title();
 }
 
+fn toggle_assistant() {
+    let (open, active_view, assistant_view, content, layout) = with_state(|s| {
+        s.assistant_open = !s.assistant_open;
+        (
+            s.assistant_open,
+            s.active.and_then(|id| {
+                s.tabs
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .map(|tab| tab.view.clone())
+            }),
+            s.assistant_view.clone(),
+            s.content.clone(),
+            s.content_layout.clone(),
+        )
+    });
+    let (Some(assistant), Some(content), Some(layout)) = (assistant_view, content, layout) else {
+        return;
+    };
+
+    if open {
+        let mut assistant_child = View::from(&assistant);
+        assistant_child.set_visible(1);
+        content.add_child_view(Some(&mut assistant_child));
+        layout.set_flex_for_view(Some(&mut assistant_child), 0);
+        if let Some(host) = assistant.browser().and_then(|browser| browser.host()) {
+            host.was_hidden(0);
+        }
+        if let Some(active) = active_view.as_ref() {
+            let mut active_child = View::from(active);
+            layout.set_flex_for_view(Some(&mut active_child), 1);
+        }
+        content.layout();
+        assistant.request_focus();
+    } else {
+        if let Some(host) = assistant.browser().and_then(|browser| browser.host()) {
+            host.was_hidden(1);
+        }
+        content.remove_child_view(Some(&mut View::from(&assistant)));
+        if let Some(active) = active_view.as_ref() {
+            let mut active_child = View::from(active);
+            layout.set_flex_for_view(Some(&mut active_child), 1);
+            active.request_focus();
+        }
+        content.layout();
+    }
+}
+
+fn get_page_text(request_id: String) {
+    let current = with_state(|s| {
+        let tab = s.tabs.iter().find(|tab| Some(tab.id) == s.active)?;
+        Some((tab.id, tab.info.clone(), tab.browser.clone()))
+    });
+    let Some((tab_id, info, Some(browser))) = current else {
+        crate::bus::emit(Event::PageText {
+            request_id,
+            tab_id: None,
+            url: String::new(),
+            title: String::new(),
+            text: String::new(),
+            truncated: false,
+            error: Some("There is no active webpage to read.".into()),
+        });
+        return;
+    };
+    let Some(frame) = browser.main_frame() else {
+        crate::bus::emit(Event::PageText {
+            request_id,
+            tab_id: Some(tab_id),
+            url: info.url,
+            title: info.title,
+            text: String::new(),
+            truncated: false,
+            error: Some("The active page is not ready yet.".into()),
+        });
+        return;
+    };
+    let mut visitor = PageTextVisitor::new(request_id, tab_id, info.url, info.title);
+    frame.text(Some(&mut visitor));
+}
+
 fn close_tab(id: TabId) {
     let removed = with_state(|s| {
         let idx = s.tabs.iter().position(|t| t.id == id)?;
         let tab = s.tabs.remove(idx);
         let next = if s.active == Some(id) {
             s.active = None;
-            s.tabs.get(idx).or_else(|| s.tabs.get(idx.wrapping_sub(1))).map(|t| t.id)
+            s.tabs
+                .get(idx)
+                .or_else(|| s.tabs.get(idx.wrapping_sub(1)))
+                .map(|t| t.id)
         } else {
             s.active
         };
         Some((tab, next, s.content.clone()))
     });
-    let Some((tab, next, content)) = removed else { return };
+    let Some((tab, next, content)) = removed else {
+        return;
+    };
 
     if let Some(content) = content {
         content.remove_child_view(Some(&mut View::from(&tab.view)));
@@ -352,10 +651,14 @@ fn handle_shortcut(event: &KeyEvent) -> bool {
             });
             next.map(|tab_id| Command::ActivateTab { tab_id })
         }
-        (false, false, false, 0x74) | (true, false, false, 0x52) => Some(Command::Reload { tab_id: None }), // F5 / Ctrl+R
-        (false, false, true, 0x25) => Some(Command::Back { tab_id: None }),    // Alt+Left
+        (false, false, false, 0x74) | (true, false, false, 0x52) => {
+            Some(Command::Reload { tab_id: None })
+        } // F5 / Ctrl+R
+        (false, false, true, 0x25) => Some(Command::Back { tab_id: None }), // Alt+Left
         (false, false, true, 0x27) => Some(Command::Forward { tab_id: None }), // Alt+Right
-        (false, false, false, 0x7B) | (true, true, false, 0x49) => Some(Command::ShowDevTools { tab_id: None }), // F12 / Ctrl+Shift+I
+        (false, false, false, 0x7B) | (true, true, false, 0x49) => {
+            Some(Command::ShowDevTools { tab_id: None })
+        } // F12 / Ctrl+Shift+I
         _ => None,
     };
     match cmd {
@@ -370,14 +673,26 @@ fn handle_shortcut(event: &KeyEvent) -> bool {
 
 fn unique_download_path(name: &str) -> PathBuf {
     let dir = dirs::download_dir().unwrap_or_else(std::env::temp_dir);
-    let name = if name.trim().is_empty() { "download" } else { name };
+    let name = if name.trim().is_empty() {
+        "download"
+    } else {
+        name
+    };
     let candidate = dir.join(name);
     if !candidate.exists() {
         return candidate;
     }
     let p = PathBuf::from(name);
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("download").to_string();
-    let ext = p.extension().and_then(|s| s.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+    let stem = p
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download")
+        .to_string();
+    let ext = p
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
     (1..)
         .map(|i| dir.join(format!("{stem} ({i}){ext}")))
         .find(|c| !c.exists())
@@ -392,6 +707,24 @@ wrap_app! {
     pub struct AibApp;
 
     impl App {
+        fn on_before_command_line_processing(
+            &self,
+            process_type: Option<&CefString>,
+            command_line: Option<&mut CommandLine>,
+        ) {
+            if process_type.is_some_and(|value| !value.to_string().is_empty()) {
+                return;
+            }
+            let Some(command_line) = command_line else { return };
+            let value = CefString::from(
+                &command_line.switch_value(Some(&CefString::from("graphics")))
+            ).to_string();
+            if crate::graphics::resolve(&value).ok() == Some(crate::graphics::GraphicsMode::Software) {
+                command_line.append_switch(Some(&CefString::from("disable-gpu")));
+                command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
+            }
+        }
+
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
             Some(AibBrowserProcessHandler::new())
         }
@@ -433,6 +766,10 @@ wrap_window_delegate! {
             RuntimeStyle::ALLOY
         }
 
+        fn can_resize(&self, _window: Option<&mut Window>) -> i32 { 1 }
+        fn can_maximize(&self, _window: Option<&mut Window>) -> i32 { 1 }
+        fn can_minimize(&self, _window: Option<&mut Window>) -> i32 { 1 }
+
         fn on_window_created(&self, window: Option<&mut Window>) {
             let Some(window) = window else { return };
             window.set_title(Some(&CefString::from(APP_NAME)));
@@ -446,11 +783,11 @@ wrap_window_delegate! {
 
             // Trusted chrome UI (tab strip + omnibox).
             let ui_url = UI_URL.get().cloned().unwrap_or_default();
-            let mut client = client();
+            let mut chrome_client = client();
             let mut chrome_delegate = ChromeViewDelegate::new();
             let settings = BrowserSettings { background_color: DARK_BG, ..Default::default() };
             let Some(chrome_view) = browser_view_create(
-                Some(&mut client),
+                Some(&mut chrome_client),
                 Some(&CefString::from(ui_url.as_str())),
                 Some(&settings),
                 None,
@@ -465,16 +802,38 @@ wrap_window_delegate! {
 
             // Content area: one BrowserView per tab, only the active one visible.
             let Some(content) = panel_create(None) else { return };
-            content.set_to_fill_layout();
+            let content_layout = content.set_to_box_layout(Some(&BoxLayoutSettings {
+                horizontal: 1,
+                cross_axis_alignment: AxisAlignment::STRETCH,
+                default_flex: 0,
+                ..Default::default()
+            }));
+            let Some(content_layout) = content_layout else { return };
             let mut content_v = View::from(&content);
             content_v.set_background_color(0xFFFFFFFF);
             window.add_child_view(Some(&mut content_v));
             layout.set_flex_for_view(Some(&mut content_v), 1);
 
+            let assistant_url = format!("{ui_url}&surface=assistant");
+            let mut assistant_client = client();
+            let mut assistant_delegate = AssistantViewDelegate::new();
+            let assistant_settings = BrowserSettings { background_color: DARK_BG, ..Default::default() };
+            let Some(assistant_view) = browser_view_create(
+                Some(&mut assistant_client),
+                Some(&CefString::from(assistant_url.as_str())),
+                Some(&assistant_settings),
+                None,
+                None,
+                Some(&mut assistant_delegate),
+            ) else {
+                return;
+            };
             with_state(|s| {
                 s.window = Some(window.clone());
                 s.content = Some(content.clone());
+                s.content_layout = Some(content_layout);
                 s.chrome_view = Some(chrome_view.clone());
+                s.assistant_view = Some(assistant_view);
             });
 
             let start = START_URL.get().cloned().flatten();
@@ -504,8 +863,11 @@ wrap_window_delegate! {
                 s.tabs.clear();
                 s.window = None;
                 s.content = None;
+                s.content_layout = None;
                 s.chrome_view = None;
                 s.chrome_browser = None;
+                s.assistant_view = None;
+                s.assistant_browser = None;
             });
             quit_message_loop();
         }
@@ -533,6 +895,32 @@ wrap_browser_view_delegate! {
         fn on_browser_created(&self, _browser_view: Option<&mut BrowserView>, browser: Option<&mut Browser>) {
             let browser = browser.cloned();
             with_state(|s| s.chrome_browser = browser);
+        }
+    }
+}
+
+wrap_browser_view_delegate! {
+    struct AssistantViewDelegate {}
+
+    impl ViewDelegate {
+        fn preferred_size(&self, _view: Option<&mut View>) -> Size {
+            // A zero-height Size is empty to CEF; the layout stretches this height.
+            Size { width: 360, height: 1 }
+        }
+
+        fn minimum_size(&self, _view: Option<&mut View>) -> Size {
+            Size { width: 280, height: 1 }
+        }
+    }
+
+    impl BrowserViewDelegate {
+        fn browser_runtime_style(&self) -> RuntimeStyle {
+            RuntimeStyle::ALLOY
+        }
+
+        fn on_browser_created(&self, _browser_view: Option<&mut BrowserView>, browser: Option<&mut Browser>) {
+            let browser = browser.cloned();
+            with_state(|s| s.assistant_browser = browser);
         }
     }
 }
@@ -596,6 +984,10 @@ wrap_window_delegate! {
             RuntimeStyle::ALLOY
         }
 
+        fn can_resize(&self, _window: Option<&mut Window>) -> i32 { 1 }
+        fn can_maximize(&self, _window: Option<&mut Window>) -> i32 { 1 }
+        fn can_minimize(&self, _window: Option<&mut Window>) -> i32 { 1 }
+
         fn on_window_created(&self, window: Option<&mut Window>) {
             let Some(window) = window else { return };
             if let Some(view) = self.view.borrow().as_ref() {
@@ -644,12 +1036,48 @@ wrap_client! {
             Some(AibLoadHandler::new())
         }
 
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(AibRequestHandler::new())
+        }
+
         fn download_handler(&self) -> Option<DownloadHandler> {
             Some(AibDownloadHandler::new())
         }
 
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(AibKeyboardHandler::new())
+        }
+    }
+}
+
+fn guarded_tab(browser: Option<&Browser>) -> bool {
+    let tab = browser
+        .map(|browser| browser.identifier())
+        .and_then(tab_id_for_browser);
+    with_state(|s| {
+        s.agent_guard
+            .as_ref()
+            .is_some_and(|guard| Some(guard.tab_id) == tab)
+    })
+}
+
+wrap_request_handler! {
+    struct AibRequestHandler;
+
+    impl RequestHandler {
+        fn on_before_browse(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>,
+            request: Option<&mut Request>, _user_gesture: i32, _is_redirect: i32) -> i32 {
+            if frame.is_none_or(|frame| frame.is_main() == 0) { return 0; }
+            let tab = browser_id(browser).and_then(tab_id_for_browser);
+            let url = request.as_ref().map(|request| CefString::from(&request.url()).to_string()).unwrap_or_default();
+            let method = request.as_ref().map(|request| CefString::from(&request.method()).to_string()).unwrap_or_default();
+            with_state(|s| {
+                let Some(guard) = s.agent_guard.as_mut().filter(|guard| Some(guard.tab_id) == tab) else { return 0 };
+                if url == guard.allowed_url && method == "GET" { return 0; }
+                guard.blocked = Some("An unapproved navigation or redirect was blocked. Stop the task to take over.".into());
+                tracing::warn!("Blocked unapproved navigation in the task tab");
+                1
+            })
         }
     }
 }
@@ -733,6 +1161,7 @@ wrap_life_span_handler! {
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut i32>,
         ) -> i32 {
+            if guarded_tab(browser.as_deref()) { return 1; }
             // The chrome UI never opens popups.
             if browser_id(browser).is_some_and(is_chrome_browser) {
                 return 1;
@@ -761,7 +1190,9 @@ wrap_life_span_handler! {
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
+            if guarded_tab(browser.as_deref()) { crate::bus::take_over(); }
             let Some(id) = browser_id(browser) else { return };
+            crate::cdp::close(id);
             let reopen = with_state(|s| {
                 s.live_browsers.retain(|b| b.identifier() != id);
                 s.detached_tabs.retain(|&d| d != id);
@@ -809,11 +1240,20 @@ wrap_download_handler! {
 
         fn on_before_download(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _download_item: Option<&mut DownloadItem>,
             suggested_name: Option<&CefString>,
             callback: Option<&mut BeforeDownloadCallback>,
         ) -> i32 {
+            if guarded_tab(browser.as_deref()) {
+                with_state(|s| {
+                    if let Some(guard) = s.agent_guard.as_mut() {
+                        guard.blocked = Some("A download was blocked. Reader tasks cannot download files.".into());
+                    }
+                });
+                tracing::warn!("Blocked a download from the task tab");
+                return 0;
+            }
             let name = suggested_name.map(|n| n.to_string()).unwrap_or_default();
             let path = unique_download_path(&name);
             if let Some(cb) = callback {
@@ -854,6 +1294,34 @@ wrap_download_handler! {
                     percent: item.percent_complete(),
                     state,
                 },
+            });
+        }
+    }
+
+}
+
+wrap_string_visitor! {
+    struct PageTextVisitor {
+        request_id: String,
+        tab_id: TabId,
+        url: String,
+        title: String,
+    }
+
+    impl CefStringVisitor {
+        fn visit(&self, string: Option<&CefString>) {
+            let source = string.map(ToString::to_string).unwrap_or_default();
+            let mut chars = source.chars();
+            let text: String = chars.by_ref().take(MAX_PAGE_TEXT_CHARS).collect();
+            let truncated = chars.next().is_some();
+            crate::bus::emit(Event::PageText {
+                request_id: self.request_id.clone(),
+                tab_id: Some(self.tab_id),
+                url: self.url.clone(),
+                title: self.title.clone(),
+                text,
+                truncated,
+                error: None,
             });
         }
     }

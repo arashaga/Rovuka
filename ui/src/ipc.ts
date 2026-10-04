@@ -13,6 +13,8 @@ export type Command =
   | { type: 'stop'; tabId?: TabId }
   | { type: 'focusContent' }
   | { type: 'showDevTools'; tabId?: TabId }
+  | { type: 'toggleAssistant' }
+  | { type: 'getPageText'; requestId: string }
 
 export interface TabInfo {
   id: TabId
@@ -38,10 +40,22 @@ export interface DownloadInfo {
   state: DownloadState
 }
 
+export type PageTextEvent = Extract<HostEvent, { type: 'pageText' }>
+
 export type HostEvent =
   | { type: 'tabs'; tabs: TabInfo[]; active: TabId | null }
   | { type: 'download'; download: DownloadInfo }
   | { type: 'focusOmnibox' }
+  | {
+      type: 'pageText'
+      requestId: string
+      tabId: TabId | null
+      url: string
+      title: string
+      text: string
+      truncated: boolean
+      error: string | null
+    }
 
 type Listener = (e: HostEvent) => void
 
@@ -99,3 +113,15 @@ class HostConnection {
 }
 
 export const host = new HostConnection()
+
+export function apiUrl(path: string): string {
+  const params = new URLSearchParams(location.search)
+  const port = params.get('port')
+  const origin = port ? `http://127.0.0.1:${port}` : location.origin
+  return new URL(path, origin).toString()
+}
+
+export function apiHeaders(): HeadersInit {
+  const token = new URLSearchParams(location.search).get('token') ?? ''
+  return { 'Content-Type': 'application/json', 'X-AIB-Token': token }
+}

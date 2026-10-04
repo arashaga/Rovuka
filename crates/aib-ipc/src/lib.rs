@@ -9,7 +9,11 @@ pub type TabId = u32;
 
 /// UI -> host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Command {
     NewTab {
         #[serde(default)]
@@ -49,6 +53,28 @@ pub enum Command {
         #[serde(default)]
         tab_id: Option<TabId>,
     },
+    ToggleAssistant,
+    GetPageText {
+        request_id: String,
+    },
+}
+
+impl Command {
+    /// Navigation and workspace changes return control to the user.
+    pub fn interrupts_agent(&self) -> bool {
+        matches!(
+            self,
+            Self::Navigate { .. }
+                | Self::Back { .. }
+                | Self::Forward { .. }
+                | Self::Reload { .. }
+                | Self::Stop { .. }
+                | Self::NewTab { .. }
+                | Self::CloseTab { .. }
+                | Self::ActivateTab { .. }
+                | Self::ToggleAssistant
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -88,7 +114,11 @@ pub struct DownloadInfo {
 
 /// Host -> UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Event {
     /// Full tab-strip snapshot. Sent on connect and after every tab change.
     Tabs {
@@ -99,6 +129,15 @@ pub enum Event {
         download: DownloadInfo,
     },
     FocusOmnibox,
+    PageText {
+        request_id: String,
+        tab_id: Option<TabId>,
+        url: String,
+        title: String,
+        text: String,
+        truncated: bool,
+        error: Option<String>,
+    },
 }
 
 /// Turn omnibox input into a URL: keep explicit URLs, add a scheme to
@@ -109,16 +148,25 @@ pub fn resolve_omnibox_input(input: &str, search_template: &str) -> String {
         return "about:blank".into();
     }
     let lower = input.to_ascii_lowercase();
-    let has_scheme = ["http://", "https://", "file://", "about:", "data:", "chrome://", "view-source:"]
-        .iter()
-        .any(|s| lower.starts_with(s));
+    let has_scheme = [
+        "http://",
+        "https://",
+        "file://",
+        "about:",
+        "data:",
+        "chrome://",
+        "view-source:",
+    ]
+    .iter()
+    .any(|s| lower.starts_with(s));
     if has_scheme {
         return input.to_string();
     }
     if !input.contains(char::is_whitespace) {
         let host = lower.split(['/', '?', '#']).next().unwrap_or_default();
         let host_no_port = host.split(':').next().unwrap_or_default();
-        let is_local = host_no_port == "localhost" || host_no_port.parse::<std::net::Ipv4Addr>().is_ok();
+        let is_local =
+            host_no_port == "localhost" || host_no_port.parse::<std::net::Ipv4Addr>().is_ok();
         if is_local {
             return format!("http://{input}");
         }
@@ -140,7 +188,9 @@ fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             b' ' => out.push('+'),
             _ => out.push_str(&format!("%{b:02X}")),
         }
@@ -156,14 +206,38 @@ mod tests {
 
     #[test]
     fn omnibox() {
-        assert_eq!(resolve_omnibox_input("https://a.com/x", T), "https://a.com/x");
-        assert_eq!(resolve_omnibox_input("example.com", T), "https://example.com");
-        assert_eq!(resolve_omnibox_input("example.com/path?q=1", T), "https://example.com/path?q=1");
-        assert_eq!(resolve_omnibox_input("localhost:3000", T), "http://localhost:3000");
-        assert_eq!(resolve_omnibox_input("127.0.0.1:8080/a", T), "http://127.0.0.1:8080/a");
-        assert_eq!(resolve_omnibox_input("rust traits", T), "https://search.example/?q=rust+traits");
-        assert_eq!(resolve_omnibox_input("v1.2", T), "https://search.example/?q=v1.2");
-        assert_eq!(resolve_omnibox_input("c++", T), "https://search.example/?q=c%2B%2B");
+        assert_eq!(
+            resolve_omnibox_input("https://a.com/x", T),
+            "https://a.com/x"
+        );
+        assert_eq!(
+            resolve_omnibox_input("example.com", T),
+            "https://example.com"
+        );
+        assert_eq!(
+            resolve_omnibox_input("example.com/path?q=1", T),
+            "https://example.com/path?q=1"
+        );
+        assert_eq!(
+            resolve_omnibox_input("localhost:3000", T),
+            "http://localhost:3000"
+        );
+        assert_eq!(
+            resolve_omnibox_input("127.0.0.1:8080/a", T),
+            "http://127.0.0.1:8080/a"
+        );
+        assert_eq!(
+            resolve_omnibox_input("rust traits", T),
+            "https://search.example/?q=rust+traits"
+        );
+        assert_eq!(
+            resolve_omnibox_input("v1.2", T),
+            "https://search.example/?q=v1.2"
+        );
+        assert_eq!(
+            resolve_omnibox_input("c++", T),
+            "https://search.example/?q=c%2B%2B"
+        );
     }
 
     #[test]
@@ -174,5 +248,49 @@ mod tests {
         assert!(matches!(c, Command::Navigate { tab_id: None, .. }));
         let e = serde_json::to_string(&Event::FocusOmnibox).unwrap();
         assert_eq!(e, r#"{"type":"focusOmnibox"}"#);
+    }
+
+    #[test]
+    fn native_and_ui_navigation_commands_interrupt_tasks() {
+        for command in [
+            Command::Reload { tab_id: None },
+            Command::Stop { tab_id: None },
+            Command::NewTab { url: None },
+            Command::CloseTab { tab_id: 1 },
+            Command::ActivateTab { tab_id: 2 },
+            Command::ToggleAssistant,
+            Command::Navigate {
+                tab_id: None,
+                input: "example.com".into(),
+            },
+            Command::Back { tab_id: None },
+            Command::Forward { tab_id: None },
+        ] {
+            assert!(command.interrupts_agent());
+        }
+        assert!(
+            !Command::GetPageText {
+                request_id: "read".into()
+            }
+            .interrupts_agent()
+        );
+        assert!(!Command::FocusContent.interrupts_agent());
+    }
+
+    #[test]
+    fn page_text_wire_format() {
+        let e = Event::PageText {
+            request_id: "req-1".into(),
+            tab_id: Some(4),
+            url: "https://example.com".into(),
+            title: "Example".into(),
+            text: "hello".into(),
+            truncated: false,
+            error: None,
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains(r#""type":"pageText""#));
+        assert!(json.contains(r#""requestId":"req-1""#));
+        assert!(json.contains(r#""tabId":4"#));
     }
 }

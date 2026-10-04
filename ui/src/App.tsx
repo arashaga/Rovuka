@@ -131,7 +131,7 @@ export default function App() {
           <input
             ref={inputRef}
             value={omnibox}
-            placeholder="Search or enter address — or tell the AI what to do (soon)"
+            placeholder="Search or enter address"
             spellCheck={false}
             onFocus={(e) => {
               setEditing(true)
@@ -164,7 +164,7 @@ export default function App() {
           </div>
         )}
 
-        <button className="ask-ai" title="AI assistant (coming in Phase 1)" disabled>
+        <button className="ask-ai" title="Ask about this page" onClick={() => host.send({ type: 'toggleAssistant' })}>
           ✦ Ask AI
         </button>
       </div>

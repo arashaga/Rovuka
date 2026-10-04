@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 aib-ipc.workspace = true
+aib-models = { path = "../aib-models" }
+aib-local = { path = "../aib-local" }
 cef.workspace = true
 tokio.workspace = true
 axum.workspace = true
@@ -25,3 +27,4 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 futures-util.workspace = true
 url.workspace = true
+async-stream.workspace = true

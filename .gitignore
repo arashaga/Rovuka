@@ -2,3 +2,35 @@
 ui/node_modules
 ui/dist
 *.log
+
+# Local porting notes, browser state and private configuration
+/mac-os-parity.md
+.env
+.env.*
+!.env.example
+*.local
+credentials*.json
+secrets*.json
+model-settings*.json
+local-preferences*.json
+models.json
+models-cloud.json
+local-runtimes.json
+/profile/
+/profiles/
+/test-results/
+/playwright-report/
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Editor/OS caches and release artifacts
+.vs/
+.DS_Store
+Thumbs.db
+*.msi
+*.msix
+*.dmg
+*.exe
+*.dll
