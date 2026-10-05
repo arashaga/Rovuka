@@ -18,7 +18,7 @@ behavior, dependencies, or packaging requirements.
 | `crates/aib-ipc` | Shared wire protocol between the chrome UI and the host |
 | `crates/aib-models` | Provider configuration, streaming chat, and secure API-key storage |
 | `crates/aib-local` | Hardware profile, loopback runtime discovery, reviewed model catalog and Ollama downloads |
-| `ui/` | React + TypeScript chrome UI (tab strip, omnibox, downloads), built with Vite |
+| `ui/` | React + TypeScript chrome UI, illustrated start page and assistant workspace, built with Vite |
 
 ## Prerequisites (Windows)
 
@@ -40,12 +40,12 @@ $env:CEF_PATH = "$env:USERPROFILE\.local\share\cef"
 ```powershell
 cd ui; npm install; npm run build; cd ..   # UI is embedded into the binary
 cargo build
-.\target\debug\rovuka.exe --url=https://example.com
+.\target\debug\rovuka.exe
 ```
 
 Flags:
 
-- `--url=<url>` — initial page
+- `--url=<url>` — open this initial page instead of the Rovuka start page
 - `--remote-debugging-port=<port>` — expose CDP (useful for automated testing)
 - `--graphics=auto|software|gpu` — `auto` uses software rendering on Windows for graphics-driver compatibility, GPU on other platforms. Explicit `gpu` opts into hardware acceleration. Browser rendering does not determine local-model acceleration.
 - `--profile-dir=<absolute path>` — use a separate CEF profile, useful for disposable tests. Without this flag the usual user profile is used.
@@ -63,6 +63,40 @@ left in a previous build folder. The internal `AIBrowser` configuration/profile
 directories, credential-store service and `AIB_*` environment variables remain
 unchanged so existing keys, local-model preferences, cookies and settings work
 without migration. This rename does not create an installer.
+
+## Rovuka start page
+
+Launch without `--url` to see the welcome/new-tab workspace. It includes a
+top **What's new** strip, an illustrated overview, a task composer, shopping,
+travel and research examples, feature shortcuts and an explanation of current
+safety boundaries. Illustrations are local SVGs; there are no remote artwork,
+news-feed requests or model calls just to display the page. The update strip
+describes this build's shipped features, not a remotely fetched feed.
+
+- Use **Prepare a task** or an example card to open an editable draft in
+  Task mode. Opening a draft does not start research, select page-sharing
+  consent, approve navigation or replace the current page. Choose/configure a
+  model, review the draft, explicitly allow sharing and press **Start task**.
+- **Connect your model**, **Explore local models**, **Open Ask AI** and
+  **Review safety** open their existing assistant workspaces. **Just browse**
+  focuses the address bar; ordinary browsing does not need a model.
+- The **Home** toolbar button opens the start page in a separate tab. The
+  **+** button, native new-tab command and closing the last tab also show it.
+  Back/Forward can return between that blank-tab state and a visited website.
+  Explicit `--url` launches and ordinary result links still open their requested
+  destination, not the start page.
+- Findings remain session-only and are preserved when opening Home. Return
+  through **Task mode → View findings**. Preparing a new draft does not erase
+  the previous server-held result; a workspace shortcut stops an active run
+  before switching away, just like other manual workspace changes.
+
+The start page is a separate trusted native BrowserView above a blank content
+tab, not a token-bearing website in tab history. Its authenticated UI URL stays
+out of the omnibox, tab snapshots and model-facing observations. Page Q&A
+explicitly refuses to share it: open a real webpage first. Themes, responsive
+320px layouts, focusable controls and reduced-motion artwork use the existing
+Clawpilot design. Runtimes, booking/form automation and installers are still not
+bundled.
 
 ## GPU context errors (Windows)
 
@@ -667,9 +701,24 @@ node .\scripts\test-agent.cjs --safety-only
 `--shutdown-only` checks native window/server/CEF shutdown with the same isolated
 fixture storage and no model request.
 
-Current Windows verification: **69 workspace Rust tests and all 76 native
-browser checks pass**, including the 10 focused safety checks. UI type-check,
-production UI build, native build and graceful shutdown checks also pass.
+For focused welcome/new-tab validation:
+
+```powershell
+node .\scripts\test-agent.cjs --start-page-only
+```
+
+This mode deliberately omits `--url` to test the normal launch. Its nine checks
+cover the trusted start-page boundary, local graphics and themes, shortcuts,
+editable drafts without automatic consent/model calls, approved task results,
+preserved findings, navigation/new/last tabs and live task cancellation.
+The complete local suite also runs these checks with an explicit startup URL.
+Both modes use disposable fixture storage and require a normal zero-exit
+shutdown, not forced termination.
+
+Current Windows verification: **70 workspace Rust tests and all 85 native
+browser checks pass**, including the nine start-page and 10 focused safety
+checks. UI type-check, production UI build, native build, focused default-start
+validation and graceful shutdown checks also pass.
 These local fixtures do not certify live model accuracy or macOS readiness.
 
 It also checks comparison-format correction, observed direct destinations,

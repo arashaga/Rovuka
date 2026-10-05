@@ -11,7 +11,7 @@ const labels: Record<TaskStatus, string> = {
   needsInput: 'More details needed', noEvidence: 'No verified result',
 }
 
-export default function TaskMode({ onActive, expanded, initialGoal = '' }: { onActive: (active: boolean) => void; expanded: boolean; initialGoal?: string }) {
+export default function TaskMode({ onActive, expanded, initialGoal = '', startFresh = false }: { onActive: (active: boolean) => void; expanded: boolean; initialGoal?: string; startFresh?: boolean }) {
   const [goal, setGoal] = useState(initialGoal)
   const [sharePage, setSharePage] = useState(false)
   const [startMode, setStartMode] = useState<'webSearch' | 'currentPage'>('webSearch')
@@ -38,6 +38,10 @@ export default function TaskMode({ onActive, expanded, initialGoal = '' }: { onA
   const presented = useRef<string | null>(null)
   const working = task?.status === 'running' && !connectionError
   const latestStep = task?.steps.at(-1) || 'Starting your task'
+
+  useEffect(() => {
+    if (startFresh) document.querySelector<HTMLTextAreaElement>('#task-goal')?.focus()
+  }, [startFresh])
 
   useEffect(() => {
     stepStarted.current = Date.now()
@@ -87,7 +91,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '' }: { onA
           if (active(next)) setShowSetup(false)
           if (!loaded.current) {
             loaded.current = true
-            if (next && !initialGoal) setShowSetup(false)
+            if (next && !initialGoal && !startFresh) setShowSetup(false)
           }
           setReady(true)
           setConnectionError('')

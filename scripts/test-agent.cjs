@@ -40,6 +40,13 @@ async function connectCdp(url) {
       else item.resolve(result.result);
     }
   });
+  ws.addEventListener('close', () => {
+    for (const item of pending.values()) {
+      clearTimeout(item.timer);
+      item.reject(new Error('Native CDP connection closed before the command completed'));
+    }
+    pending.clear();
+  });
   return {
     close: () => ws.close(),
     command: (method, params = {}) => new Promise((resolve, reject) => {
@@ -56,6 +63,7 @@ async function main() {
   const liveModel = process.argv.includes('--live-model') || liveWeb;
   const safetyOnly = process.argv.includes('--safety-only');
   const shutdownOnly = process.argv.includes('--shutdown-only');
+  const startPageOnly = process.argv.includes('--start-page-only');
   const fixtureParty = liveModel && process.argv.includes('--family')
     ? 'two adults and two children ages 8 and 15, two hotel rooms for five nights; the fixture charges the same fare for each traveler'
     : 'two adults, one hotel room for five nights';
@@ -63,6 +71,8 @@ async function main() {
   const captureArgument = process.argv.indexOf('--replay-option-sources');
   assert(!safetyOnly || (!liveModel && captureArgument < 0), 'Safety checks must use only local fixtures');
   assert(!shutdownOnly || (!liveModel && captureArgument < 0), 'Shutdown checks must use only local fixtures');
+  assert(!startPageOnly || (!liveModel && captureArgument < 0 && !safetyOnly && !shutdownOnly),
+    'Start-page checks must use only local fixtures and their own focused mode');
   const privacyToken = ['sk', 'simulatedfixture'.repeat(3)].join('-');
   const privacyCard = ['4111', '1111', '1111', '1111'].join(' ');
   const privateValues = [privacyToken, privacyCard, 'fixturePagePassword', 'fixtureTitlePassword',
@@ -549,7 +559,8 @@ async function main() {
     if (liveModel) delete childEnv.AIB_MODEL_SETTINGS_FILE;
     else childEnv.AIB_MODEL_SETTINGS_FILE = settings;
     child = spawn(browserExecutable,
-      ['--graphics=software', `--remote-debugging-port=${debugPort}`, `--profile-dir=${path.join(temp, 'Profile')}`, `--url=${fixtureBase}/start`],
+      ['--graphics=software', `--remote-debugging-port=${debugPort}`, `--profile-dir=${path.join(temp, 'Profile')}`,
+        ...(startPageOnly ? [] : [`--url=${fixtureBase}/start`])],
       { cwd: root, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', chunk => { logs += chunk; });
     child.stderr.on('data', chunk => { logs += chunk; });
@@ -563,7 +574,7 @@ async function main() {
     }, 'browser servers');
     const chrome = await waitFor(async () => {
       const tabs = await (await fetch(`http://127.0.0.1:${nativePort}/json/list`)).json();
-      return tabs.find(tab => tab.type === 'page' && tab.url.startsWith(base));
+      return tabs.find(tab => tab.type === 'page' && tab.url.startsWith(base) && !new URL(tab.url).searchParams.has('surface'));
     }, 'trusted chrome');
     token = new URL(chrome.url).searchParams.get('token');
     assert(token, 'Missing trusted UI token');
@@ -683,6 +694,240 @@ async function main() {
       assert.equal(code, 0, failure.trim());
       await waitFor(() => child.exitCode !== null || child.signalCode !== null, 'clean browser shutdown', 30000);
       assert.equal(child.exitCode, 0, `Test browser shutdown failed: ${child.signalCode || child.exitCode}`);
+    };
+    const startPageChecks = async () => {
+      const initial = await waitFor(tabSnapshot, 'initial native tab state');
+      assert.equal(initial.tabs.length, 1);
+      assert.equal(initial.tabs[0].url, startPageOnly ? '' : `${fixtureBase}/start`,
+        'The start page must not override an explicit --url argument');
+      const callsBefore = modelCalls;
+      if (!startPageOnly) {
+        await browserSocket.command('Runtime.evaluate', { expression: 'document.querySelector(".home-nav").click()' });
+        await waitFor(async () => {
+          const state = await tabSnapshot();
+          return state?.tabs.length === 2 && state.tabs.find(tab => tab.id === state.active)?.url === '';
+        }, 'Home opens a separate blank tab');
+      }
+      const target = await waitFor(async () => {
+        const pages = await (await fetch(`http://127.0.0.1:${nativePort}/json/list`)).json();
+        return pages.find(page => page.url.startsWith(base) && new URL(page.url).searchParams.get('surface') === 'start');
+      }, 'trusted start surface');
+      const home = await connectCdp(target.webSocketDebuggerUrl);
+      let assistant;
+      const ui = async (connection, expression) => {
+        let state;
+        try {
+          state = await connection.command('Runtime.evaluate', { expression, returnByValue: true });
+        } catch (error) {
+          throw new Error(`Start-page evaluation failed: ${expression.slice(0, 160)}`, { cause: error });
+        }
+        assert(!state.exceptionDetails, JSON.stringify(state.exceptionDetails));
+        return state.result?.value;
+      };
+      const send = command => ui(browserSocket,
+        `window.__agentTestConnection.send(${JSON.stringify(JSON.stringify(command))})`);
+      const focusHome = async () => {
+        await send({ type: 'focusContent' });
+        await waitFor(() => ui(home, 'document.hasFocus() && innerWidth>300'), 'start surface is visible and receives native content focus');
+      };
+      const clickHome = expression => ui(home, expression);
+      const draftReady = snippet => waitFor(() => ui(assistant,
+        `${snippet ? `document.querySelector("#task-goal")?.value.includes(${JSON.stringify(snippet)})` : 'document.querySelector("#task-goal")?.value===""'} && !!document.querySelector(".task-form") && !document.querySelector(".task-form input[type=checkbox]").checked && document.querySelector(".task-form button[type=submit]").disabled`),
+      `consent-free draft opens: ${snippet}`);
+      const themeSettled = () => waitFor(() => ui(home,
+        'getComputedStyle(document.querySelector(".start-example")).backgroundColor===getComputedStyle(document.querySelector(".start-composer")).backgroundColor'),
+      'theme transition reaches the exact card surface color');
+      try {
+        await waitFor(() => ui(home, '!!document.querySelector(".start-page") && document.querySelectorAll(".start-example").length===3'), 'start-page content ready');
+        await focusHome();
+        const snapshot = await tabSnapshot();
+        assert(snapshot.tabs.every(tab => !tab.url.includes('token=') && !tab.url.startsWith(base)));
+        assert.equal(await ui(browserSocket, 'document.querySelector(".omnibox input").value'), '');
+        assert.equal(modelCalls, callsBefore, 'Opening the start page must not call a model');
+        assert.equal(await ui(home, 'document.querySelector(".start-composer button").disabled'), true);
+        console.log(`PASS: ${startPageOnly ? 'default launch shows the Rovuka start page' : 'explicit --url is preserved and Home opens the start page'}; trusted UI tokens stay out of tab metadata and the omnibox`);
+
+        for (const theme of ['light', 'dark']) {
+          for (const width of [1280, 640, 320]) {
+            await home.command('Emulation.setDeviceMetricsOverride', { width, height: 960, deviceScaleFactor: 1, mobile: false });
+            await ui(home, `document.documentElement.setAttribute("data-theme",${JSON.stringify(theme)})`);
+            await themeSettled();
+            const layout = await ui(home, `(() => {
+              const root=document.querySelector(".start-page"), updates=document.querySelector(".start-updates"), heading=document.querySelector("#start-title");
+              const controls=Array.from(root.querySelectorAll("button,textarea")).map(node=>node.getBoundingClientRect());
+              return {fits:root.scrollWidth<=innerWidth && document.documentElement.scrollWidth<=innerWidth,
+                controlsFit:controls.every(box=>box.left>=0 && box.right<=innerWidth+1),
+                updatesFirst:updates.getBoundingClientRect().top<heading.getBoundingClientRect().top,
+                surfacesMatch:getComputedStyle(document.querySelector(".start-example")).backgroundColor===getComputedStyle(document.querySelector(".start-composer")).backgroundColor,
+                graphics:document.querySelectorAll(".start-illustration svg").length,
+                labels:!!document.querySelector('label[for="start-goal"]')};
+            })()`);
+            assert(layout.fits && layout.controlsFit && layout.updatesFirst && layout.labels && layout.surfacesMatch, JSON.stringify({ theme, width, layout }));
+            assert.equal(layout.graphics, 1);
+          }
+        }
+        await home.command('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+        assert.equal(await ui(home, 'getComputedStyle(document.querySelector(".start-art-float")).animationName'), 'none');
+        await home.command('Emulation.setEmulatedMedia', { features: [] });
+        await home.command('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
+        if (process.env.AIB_TEST_START_SCREENSHOT) {
+          const file = process.env.AIB_TEST_START_SCREENSHOT;
+          assert(path.isAbsolute(file), 'Start-page screenshot path must be absolute');
+          for (const theme of ['light', 'dark']) {
+            await ui(home, `document.documentElement.setAttribute("data-theme",${JSON.stringify(theme)}); document.querySelector(".start-page").scrollTop=0`);
+            await themeSettled();
+            const image = await home.command('Page.captureScreenshot', { format: 'png' });
+            const parsed = path.parse(file);
+            await fs.writeFile(theme === 'light' ? file : path.join(parsed.dir, `${parsed.name}-dark${parsed.ext}`), Buffer.from(image.data, 'base64'));
+          }
+          const parsed = path.parse(file);
+          await ui(home, 'document.querySelector(".start-page").scrollTop=document.querySelector(".start-page").scrollHeight');
+          const safetyImage = await home.command('Page.captureScreenshot', { format: 'png' });
+          await fs.writeFile(path.join(parsed.dir, `${parsed.name}-safety${parsed.ext}`), Buffer.from(safetyImage.data, 'base64'));
+          await home.command('Emulation.setDeviceMetricsOverride', { width: 320, height: 960, deviceScaleFactor: 1, mobile: false });
+          await ui(home, 'document.documentElement.setAttribute("data-theme","light"); document.querySelector(".start-page").scrollTop=0');
+          await themeSettled();
+          const narrowImage = await home.command('Page.captureScreenshot', { format: 'png' });
+          await fs.writeFile(path.join(parsed.dir, `${parsed.name}-narrow${parsed.ext}`), Buffer.from(narrowImage.data, 'base64'));
+        }
+        await home.command('Emulation.clearDeviceMetricsOverride');
+        await clickHome('document.querySelector(".start-header .start-text-button").click()');
+        await waitFor(() => ui(browserSocket, 'document.activeElement===document.querySelector(".omnibox input")'), 'Just browse focuses the native omnibox');
+        console.log('PASS: illustrated start page fits 1280px, 640px and 320px light/dark layouts, keeps What is new first, labels its composer and respects reduced motion');
+
+        await clickHome('document.querySelector(".start-header .start-outline-button").click()');
+        const assistantTarget = await waitFor(async () => {
+          const pages = await (await fetch(`http://127.0.0.1:${nativePort}/json/list`)).json();
+          return pages.find(page => page.url.startsWith(base) && new URL(page.url).searchParams.get('surface') === 'assistant');
+        }, 'assistant created by the first start-page shortcut');
+        assistant = await connectCdp(assistantTarget.webSocketDebuggerUrl);
+        await waitFor(() => ui(assistant, '!!document.querySelector(".model-settings")'), 'Connect your model shortcut');
+        await clickHome('Array.from(document.querySelectorAll(".start-features button")).find(button=>button.textContent.includes("Explore local models")).click()');
+        await waitFor(() => ui(assistant, '!!document.querySelector(".local-models")'), 'local models shortcut');
+        await clickHome('document.querySelector(".start-updates button").click()');
+        await waitFor(() => ui(assistant, '!!document.querySelector(".safety-center")'), 'What is new Safety shortcut');
+        await clickHome('document.querySelector(".start-safety button").click()');
+        await waitFor(() => ui(assistant, '!!document.querySelector(".safety-center")'), 'safety overview shortcut');
+        assert.equal(modelCalls, callsBefore);
+        console.log('PASS: Connect your model, local models, What is new and safety controls open the correct assistant workspace without a model call');
+
+        for (const [category, snippet] of [['shopping', 'wireless headphones'], ['travel', 'Austin to Cancun'], ['research', 'Microsoft OneNote']]) {
+          await clickHome(`document.querySelector('[data-example="${category}"]').click()`);
+          await draftReady(snippet);
+          assert.equal(await ui(assistant, 'document.querySelector("#task-start").value'), 'webSearch');
+          assert.equal(await ui(assistant, 'document.activeElement.id'), 'task-goal');
+          assert.equal(modelCalls, callsBefore);
+        }
+        console.log('PASS: shopping, travel and research examples prefill editable same-panel drafts, use web search and never preselect sharing consent or start research');
+
+        await clickHome('Array.from(document.querySelectorAll(".start-features button")).find(button=>button.textContent.includes("Open Ask AI")).click()');
+        await waitFor(() => ui(assistant, '!!document.querySelector(".assistant-composer")'), 'Ask this page shortcut');
+        await ui(assistant, 'document.querySelector(".assistant-composer textarea").focus()');
+        await assistant.command('Input.insertText', { text: 'Summarize this start page' });
+        await ui(assistant, 'document.querySelector(".assistant-composer button[type=submit]").click()');
+        await waitFor(() => ui(assistant, 'document.querySelector(".chat-recovery [role=alert]")?.textContent.includes("start page is not shared")'), 'trusted start-page reading refusal');
+        assert.equal(modelCalls, callsBefore, 'The privileged start page must never reach page Q&A');
+        console.log('PASS: Ask this page cannot share the trusted welcome page or its UI token with a model; the user gets an explicit open-a-webpage error');
+
+        await focusHome();
+        await ui(home, 'document.querySelector("#start-goal").focus()');
+        await home.command('Input.insertText', { text: 'compare desks from the web' });
+        await clickHome('document.querySelector(".start-composer button").click()');
+        await draftReady('compare desks from the web');
+        assert.equal(modelCalls, callsBefore);
+        await ui(assistant, 'document.querySelector(".task-form input[type=checkbox]").click()');
+        await waitFor(() => ui(assistant, '!document.querySelector(".task-form button[type=submit]").disabled'), 'explicitly consented draft ready');
+        await ui(assistant, 'document.querySelector(".task-form button[type=submit]").click()');
+        const proposal = await pending();
+        assert.equal(proposal.pagesRead, 0);
+        await waitFor(() => ui(assistant, 'Array.from(document.querySelectorAll("button")).some(button=>button.textContent==="Allow all research for this task")'), 'research approval still required');
+        await ui(assistant, 'Array.from(document.querySelectorAll("button")).find(button=>button.textContent==="Allow all research for this task").click()');
+        const view = await terminal();
+        assert.equal(view.status, 'completed', view.error);
+        assert.equal(view.report.options.length, 2);
+        await waitFor(() => ui(assistant, 'document.querySelectorAll(".findings-option").length===2 && innerWidth>700'), 'approved welcome task displays full-width actionable results');
+        console.log('PASS: custom welcome prompt reaches Task mode unchanged, requires explicit sharing and Start plus navigation approval, then renders native evidence-backed options');
+
+        const callsAfter = modelCalls;
+        await ui(browserSocket, 'document.querySelector(".home-nav").click()');
+        await waitFor(async () => {
+          const state = await tabSnapshot();
+          return state?.tabs.find(tab => tab.id === state.active)?.url === '';
+        }, 'Home from findings preserves the result tab');
+        await reopenFindings(assistant, view);
+        await ui(assistant, 'Array.from(document.querySelectorAll(".findings-nav button")).find(button=>button.textContent==="Back to conversation").click()');
+        await focusHome();
+        await clickHome('Array.from(document.querySelectorAll(".start-features button")).find(button=>button.textContent.includes("Create a task")).click()');
+        await draftReady('');
+        assert.equal(await ui(assistant, 'document.querySelector("#task-goal").value'), '');
+        assert.equal((await rpc('/api/agent')).id, view.id);
+        assert.equal(modelCalls, callsAfter);
+        await clickHome('document.querySelector(\'[data-example="shopping"]\').click()');
+        await draftReady('wireless headphones');
+        assert.equal(modelCalls, callsAfter);
+        console.log('PASS: Home preserves session findings and their source tab; generic and example shortcuts open fresh drafts after a completed task without replaying old results or calling the model');
+
+        await navigate();
+        await send({ type: 'back' });
+        await waitFor(async () => {
+          const state = await tabSnapshot();
+          return state?.tabs.find(tab => tab.id === state.active)?.url === '';
+        }, 'Back returns to the welcome surface');
+        await focusHome();
+        await send({ type: 'forward' });
+        await waitFor(async () => {
+          const state = await tabSnapshot();
+          return state?.tabs.find(tab => tab.id === state.active)?.url === `${fixtureBase}/start`;
+        }, 'Forward restores the normal website');
+        const beforePlus = await tabSnapshot();
+        await ui(browserSocket, 'document.querySelector(".new-tab").click()');
+        await waitFor(async () => (await tabSnapshot())?.tabs.length === beforePlus.tabs.length + 1, 'plus opens a start tab');
+        await focusHome();
+        await send({ type: 'newTab' });
+        await waitFor(async () => (await tabSnapshot())?.tabs.length === beforePlus.tabs.length + 2, 'native new-tab command opens a start tab');
+        const allTabs = await tabSnapshot();
+        for (const tab of allTabs.tabs.filter(tab => tab.id !== allTabs.active)) {
+          await send({ type: 'closeTab', tabId: tab.id });
+          await waitFor(async () => !(await tabSnapshot())?.tabs.some(item => item.id === tab.id), 'individual tab closes');
+        }
+        await send({ type: 'closeTab', tabId: allTabs.active });
+        await waitFor(async () => {
+          const state = await tabSnapshot();
+          return state?.tabs.length === 1 && state.active !== allTabs.active && state.tabs[0].url === '';
+        }, 'closing the last tab restores a start tab');
+        await focusHome();
+        assert.equal(modelCalls, callsAfter);
+        console.log('PASS: normal navigation, Back/Forward, Home, plus, native new-tab command and closing the last tab switch between website and welcome surfaces without token-bearing tab history');
+
+        await clickHome('Array.from(document.querySelectorAll(".start-features button")).find(button=>button.textContent.includes("Create a task")).click()');
+        await draftReady('');
+        await ui(assistant, 'document.querySelector("#task-goal").focus()');
+        await assistant.command('Input.insertText', { text: 'slow compare desks from the web' });
+        await ui(assistant, 'document.querySelector(".task-form input[type=checkbox]").click()');
+        await waitFor(() => ui(assistant, '!document.querySelector(".task-form button[type=submit]").disabled'), 'task cancellation fixture ready');
+        const searchesBefore = hits.get('/search') || 0;
+        await ui(assistant, 'document.querySelector(".task-form button[type=submit]").click()');
+        await waitFor(() => ui(assistant, '!!document.querySelector(".task-run") && Array.from(document.querySelectorAll(".assistant-tabs button")).every(button=>button.disabled)'), 'task is active before switching workspace');
+        await clickHome('document.querySelector(".start-header .start-outline-button").click()');
+        await waitFor(() => ui(assistant, '!!document.querySelector(".model-settings") && Array.from(document.querySelectorAll(".assistant-tabs button")).every(button=>!button.disabled)'), 'shortcut cancels task and releases workspace controls');
+        const stopped = await terminal();
+        assert.equal(stopped.status, 'stopped');
+        await delay(3000);
+        assert.equal((await rpc('/api/agent')).status, 'stopped');
+        assert.equal(hits.get('/search') || 0, searchesBefore);
+        console.log('PASS: a start-page workspace shortcut stops active research before navigation and releases assistant tabs instead of leaving them disabled');
+
+        await navigate();
+        await send({ type: 'openAssistant', panel: 'chat' });
+        await waitFor(() => ui(assistant, '!!document.querySelector(".assistant-composer")'), 'restore ordinary chat workspace');
+        await assistant.command('Page.reload');
+        await waitFor(() => ui(assistant, '!!document.querySelector(".assistant-composer") && document.querySelectorAll(".chat-message").length===0'), 'isolate later chat fixtures from the welcome-page Q&A test');
+        await ui(assistant, 'document.querySelector(\'button[title="Close Ask AI"]\').click()');
+      } finally {
+        await home.command('Emulation.clearDeviceMetricsOverride');
+        home.close();
+        assistant?.close();
+      }
     };
     const safetyChecks = async () => {
       const unauthenticated = await fetch(`${base}/api/safety`);
@@ -898,6 +1143,12 @@ async function main() {
       await closeTestBrowser();
       return;
     }
+    if (startPageOnly) {
+      await startPageChecks();
+      await closeTestBrowser();
+      return;
+    }
+    if (!liveModel && !capturedResponse) await startPageChecks();
     if(capturedResponse) {
       await navigate('/citation-page/1');
       await rpc('/api/agent',{goal:'Replay captured option sources',sharePage:true,startMode:'currentPage',compareOptions:true});

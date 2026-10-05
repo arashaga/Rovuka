@@ -7,6 +7,16 @@ use serde::{Deserialize, Serialize};
 
 pub type TabId = u32;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AssistantPanel {
+    Chat,
+    Task,
+    Local,
+    Safety,
+    Settings,
+}
+
 /// UI -> host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
@@ -49,11 +59,17 @@ pub enum Command {
     },
     /// Move keyboard focus from the chrome UI into the active page.
     FocusContent,
+    FocusOmnibox,
     ShowDevTools {
         #[serde(default)]
         tab_id: Option<TabId>,
     },
     ToggleAssistant,
+    OpenAssistant {
+        panel: AssistantPanel,
+        #[serde(default)]
+        goal: Option<String>,
+    },
     SetAssistantExpanded {
         expanded: bool,
     },
@@ -76,6 +92,7 @@ impl Command {
                 | Self::CloseTab { .. }
                 | Self::ActivateTab { .. }
                 | Self::ToggleAssistant
+                | Self::OpenAssistant { .. }
         )
     }
 }
@@ -134,6 +151,11 @@ pub enum Event {
     FocusOmnibox,
     AssistantLayout {
         expanded: bool,
+    },
+    AssistantWorkspace {
+        request_id: String,
+        panel: AssistantPanel,
+        goal: Option<String>,
     },
     PageText {
         request_id: String,
@@ -265,6 +287,10 @@ mod tests {
             Command::CloseTab { tab_id: 1 },
             Command::ActivateTab { tab_id: 2 },
             Command::ToggleAssistant,
+            Command::OpenAssistant {
+                panel: AssistantPanel::Task,
+                goal: Some("Compare headphones".into()),
+            },
             Command::Navigate {
                 tab_id: None,
                 input: "example.com".into(),
@@ -281,6 +307,7 @@ mod tests {
             .interrupts_agent()
         );
         assert!(!Command::FocusContent.interrupts_agent());
+        assert!(!Command::FocusOmnibox.interrupts_agent());
         assert!(!Command::SetAssistantExpanded { expanded: true }.interrupts_agent());
     }
 
@@ -295,6 +322,33 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Event::AssistantLayout { expanded: false }).unwrap(),
             r#"{"type":"assistantLayout","expanded":false}"#
+        );
+    }
+
+    #[test]
+    fn assistant_shortcut_wire_format() {
+        let command: Command = serde_json::from_str(
+            r#"{"type":"openAssistant","panel":"task","goal":"Compare headphones"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command,
+            Command::OpenAssistant {
+                panel: AssistantPanel::Task,
+                goal: Some(goal),
+            } if goal == "Compare headphones"
+        ));
+        assert!(
+            serde_json::from_str::<Command>(r#"{"type":"openAssistant","panel":"buy"}"#).is_err()
+        );
+        assert_eq!(
+            serde_json::to_string(&Event::AssistantWorkspace {
+                request_id: "draft-1".into(),
+                panel: AssistantPanel::Safety,
+                goal: None,
+            })
+            .unwrap(),
+            r#"{"type":"assistantWorkspace","requestId":"draft-1","panel":"safety","goal":null}"#
         );
     }
 

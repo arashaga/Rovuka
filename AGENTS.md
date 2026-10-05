@@ -16,6 +16,10 @@ the reader (`perception.js`) or travel instructions, also run
 
 Privacy/audit changes must pass `node .\scripts\test-agent.cjs --safety-only`
 after rebuilding. Native fixtures isolate `AIB_AUDIT_DIR` from the real history.
+Start-page/assistant-shortcut changes must also pass
+`node .\scripts\test-agent.cjs --start-page-only`. The normal launch/new-tab page
+must stay in a separate trusted BrowserView, never a token-bearing content tab.
+Opening a task draft must not call a model or preselect sharing consent.
 Keep the durable audit metadata-only: never add goals, snapshots, full URLs,
 model responses or endpoints. Sensitive outbound URLs and audit write failures
 must fail explicitly; allow-all never bypasses these checks.

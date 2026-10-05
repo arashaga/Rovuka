@@ -53,6 +53,9 @@ struct HostState {
     content_layout: Option<BoxLayout>,
     chrome_view: Option<BrowserView>,
     chrome_browser: Option<Browser>,
+    start_view: Option<BrowserView>,
+    start_browser: Option<Browser>,
+    start_open: bool,
     assistant_view: Option<BrowserView>,
     assistant_browser: Option<Browser>,
     assistant_open: bool,
@@ -101,6 +104,9 @@ fn is_chrome_browser(id: i32) -> bool {
             || s.assistant_browser
                 .as_ref()
                 .is_some_and(|b| b.identifier() == id)
+            || s.start_browser
+                .as_ref()
+                .is_some_and(|b| b.identifier() == id)
     })
 }
 
@@ -117,9 +123,14 @@ fn update_tab(id: TabId, f: impl FnOnce(&mut TabInfo)) {
         let tab = s.tabs.iter_mut().find(|t| t.id == id)?;
         let before = tab.info.clone();
         f(&mut tab.info);
-        (before != tab.info).then_some(())
+        let changed_surface =
+            s.active == Some(id) && before.url.is_empty() != tab.info.url.is_empty();
+        (before != tab.info).then_some(changed_surface)
     });
-    if changed.is_some() {
+    if let Some(changed_surface) = changed {
+        if changed_surface {
+            layout_content(false);
+        }
         emit_tabs();
         update_window_title();
     }
@@ -445,6 +456,8 @@ pub fn handle_command(cmd: Command) {
             let view = with_state(|s| {
                 if s.assistant_expanded {
                     s.assistant_view.clone()
+                } else if s.start_open {
+                    s.start_view.clone()
                 } else {
                     s.active.and_then(|id| {
                         s.tabs
@@ -458,6 +471,7 @@ pub fn handle_command(cmd: Command) {
                 view.request_focus();
             }
         }
+        Command::FocusOmnibox => focus_omnibox(),
         Command::ShowDevTools { tab_id } => {
             if let Some(host) = tab_browser(tab_id).and_then(|b| b.host()) {
                 let window_info = WindowInfo {
@@ -474,43 +488,101 @@ pub fn handle_command(cmd: Command) {
             }
         }
         Command::ToggleAssistant => toggle_assistant(),
+        Command::OpenAssistant { panel, goal } => {
+            if !with_state(|s| s.assistant_open) {
+                toggle_assistant();
+            }
+            set_assistant_expanded(false);
+            crate::bus::emit(Event::AssistantWorkspace {
+                request_id: crate::server::random_token(),
+                panel,
+                goal,
+            });
+            if let Some(view) = with_state(|s| s.assistant_view.clone()) {
+                view.request_focus();
+            }
+        }
         Command::SetAssistantExpanded { expanded } => set_assistant_expanded(expanded),
         Command::GetPageText { request_id } => get_page_text(request_id),
     }
 }
 
 fn set_assistant_expanded(expanded: bool) {
-    let (assistant, content, layout, active, open) = with_state(|s| {
+    let (assistant, open) = with_state(|s| {
         s.assistant_expanded = expanded && s.assistant_open;
-        (
-            s.assistant_view.clone(),
-            s.content.clone(),
-            s.content_layout.clone(),
-            s.active.and_then(|id| {
-                s.tabs
-                    .iter()
-                    .find(|tab| tab.id == id)
-                    .map(|tab| tab.view.clone())
-            }),
-            s.assistant_expanded,
-        )
+        (s.assistant_view.clone(), s.assistant_expanded)
     });
-    if let (Some(assistant), Some(content), Some(layout)) = (assistant, content, layout) {
-        if let Some(active) = active {
-            let mut child = View::from(&active);
-            child.set_visible((!open) as i32);
-            layout.set_flex_for_view(Some(&mut child), if open { 0 } else { 1 });
-            if let Some(host) = active.browser().and_then(|browser| browser.host()) {
-                host.was_hidden(open as i32);
-            }
-        }
-        layout.set_flex_for_view(Some(&mut View::from(&assistant)), if open { 1 } else { 0 });
-        content.layout();
-        if open {
-            assistant.request_focus();
-        }
+    layout_content(false);
+    if open && let Some(assistant) = assistant {
+        assistant.request_focus();
     }
     crate::bus::emit(Event::AssistantLayout { expanded: open });
+}
+
+fn layout_content(focus: bool) {
+    let (tabs, active, start, start_open, assistant, assistant_open, expanded, content, layout) =
+        with_state(|s| {
+            s.start_open = !s.assistant_expanded
+                && s.tabs
+                    .iter()
+                    .any(|tab| Some(tab.id) == s.active && tab.info.url.is_empty());
+            (
+                s.tabs
+                    .iter()
+                    .map(|tab| (tab.id, tab.view.clone()))
+                    .collect::<Vec<_>>(),
+                s.active,
+                s.start_view.clone(),
+                s.start_open,
+                s.assistant_view.clone(),
+                s.assistant_open,
+                s.assistant_expanded,
+                s.content.clone(),
+                s.content_layout.clone(),
+            )
+        });
+    let (Some(content), Some(layout)) = (content, layout) else {
+        return;
+    };
+    let mut focus_view = None;
+    for (id, view) in tabs {
+        let visible = Some(id) == active && !expanded && !start_open;
+        let mut child = View::from(&view);
+        child.set_visible(visible as i32);
+        layout.set_flex_for_view(Some(&mut child), if visible { 1 } else { 0 });
+        if let Some(host) = view.browser().and_then(|browser| browser.host()) {
+            host.was_hidden((!visible) as i32);
+        }
+        if visible {
+            focus_view = Some(view);
+        }
+    }
+    if let Some(start) = start {
+        let mut child = View::from(&start);
+        child.set_visible(start_open as i32);
+        layout.set_flex_for_view(Some(&mut child), if start_open { 1 } else { 0 });
+        if let Some(host) = start.browser().and_then(|browser| browser.host()) {
+            host.was_hidden((!start_open) as i32);
+        }
+        if start_open {
+            focus_view = Some(start);
+        }
+    }
+    if assistant_open && let Some(assistant) = assistant {
+        let mut child = View::from(&assistant);
+        child.set_visible(1);
+        layout.set_flex_for_view(Some(&mut child), if expanded { 1 } else { 0 });
+        if let Some(host) = assistant.browser().and_then(|browser| browser.host()) {
+            host.was_hidden(0);
+        }
+        if expanded {
+            focus_view = Some(assistant);
+        }
+    }
+    content.layout();
+    if focus && let Some(view) = focus_view {
+        view.request_focus();
+    }
 }
 
 fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
@@ -572,71 +644,31 @@ fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
 }
 
 fn activate_tab(id: TabId) {
-    let (views, content, layout, assistant_open, assistant_view) = with_state(|s| {
+    let valid = with_state(|s| {
         if !s.tabs.iter().any(|t| t.id == id) {
-            return (Vec::new(), None, None, false, None);
+            return false;
         }
         s.active = Some(id);
-        (
-            s.tabs
-                .iter()
-                .map(|t| (t.id, t.view.clone()))
-                .collect::<Vec<_>>(),
-            s.content.clone(),
-            s.content_layout.clone(),
-            s.assistant_open,
-            s.assistant_view.clone(),
-        )
+        true
     });
-    let Some(content) = content else { return };
-    for (tid, view) in &views {
-        let visible = *tid == id;
-        let mut child = View::from(view);
-        child.set_visible(visible as i32);
-        if let Some(layout) = &layout {
-            layout.set_flex_for_view(Some(&mut child), if visible { 1 } else { 0 });
-        }
-        if let Some(host) = view.browser().and_then(|b| b.host()) {
-            host.was_hidden((!visible) as i32);
-        }
+    if !valid {
+        return;
     }
-    if assistant_open {
-        if let (Some(layout), Some(sidebar)) = (&layout, &assistant_view) {
-            let mut child = View::from(sidebar);
-            child.set_visible(1);
-            layout.set_flex_for_view(Some(&mut child), 0);
-        }
-        if let Some(sidebar) = assistant_view {
-            if let Some(host) = sidebar.browser().and_then(|browser| browser.host()) {
-                host.was_hidden(0);
-            }
-        }
-    }
-    content.layout();
-    if let Some((_, view)) = views.iter().find(|(tid, _)| *tid == id) {
-        view.request_focus();
-    }
+    layout_content(true);
     emit_tabs();
     update_window_title();
 }
 
 fn toggle_assistant() {
-    let (open, active_view, assistant_view, content, layout) = with_state(|s| {
+    let (open, assistant_view, content) = with_state(|s| {
         s.assistant_open = !s.assistant_open;
         (
             s.assistant_open,
-            s.active.and_then(|id| {
-                s.tabs
-                    .iter()
-                    .find(|tab| tab.id == id)
-                    .map(|tab| tab.view.clone())
-            }),
             s.assistant_view.clone(),
             s.content.clone(),
-            s.content_layout.clone(),
         )
     });
-    let (Some(assistant), Some(content), Some(layout)) = (assistant_view, content, layout) else {
+    let (Some(assistant), Some(content)) = (assistant_view, content) else {
         return;
     };
 
@@ -644,27 +676,14 @@ fn toggle_assistant() {
         let mut assistant_child = View::from(&assistant);
         assistant_child.set_visible(1);
         content.add_child_view(Some(&mut assistant_child));
-        layout.set_flex_for_view(Some(&mut assistant_child), 0);
-        if let Some(host) = assistant.browser().and_then(|browser| browser.host()) {
-            host.was_hidden(0);
-        }
-        if let Some(active) = active_view.as_ref() {
-            let mut active_child = View::from(active);
-            layout.set_flex_for_view(Some(&mut active_child), 1);
-        }
-        content.layout();
+        layout_content(false);
         assistant.request_focus();
     } else {
         if let Some(host) = assistant.browser().and_then(|browser| browser.host()) {
             host.was_hidden(1);
         }
         content.remove_child_view(Some(&mut View::from(&assistant)));
-        if let Some(active) = active_view.as_ref() {
-            let mut active_child = View::from(active);
-            layout.set_flex_for_view(Some(&mut active_child), 1);
-            active.request_focus();
-        }
-        content.layout();
+        layout_content(true);
     }
 }
 
@@ -685,6 +704,20 @@ fn get_page_text(request_id: String) {
         });
         return;
     };
+    if info.url.is_empty() {
+        crate::bus::emit(Event::PageText {
+            request_id,
+            tab_id: Some(tab_id),
+            url: String::new(),
+            title: info.title,
+            text: String::new(),
+            truncated: false,
+            error: Some(
+                "Open a webpage first. The Rovuka start page is not shared with your model.".into(),
+            ),
+        });
+        return;
+    }
     let Some(frame) = browser.main_frame() else {
         crate::bus::emit(Event::PageText {
             request_id,
@@ -942,6 +975,25 @@ wrap_window_delegate! {
             window.add_child_view(Some(&mut content_v));
             layout.set_flex_for_view(Some(&mut content_v), 1);
 
+            // Keep the token-bearing start page out of content tabs and their history.
+            let start_url = format!("{ui_url}&surface=start");
+            let mut start_client = client();
+            let mut start_delegate = StartViewDelegate::new();
+            let Some(start_view) = browser_view_create(
+                Some(&mut start_client),
+                Some(&CefString::from(start_url.as_str())),
+                Some(&settings),
+                None,
+                None,
+                Some(&mut start_delegate),
+            ) else {
+                return;
+            };
+            let mut start_child = View::from(&start_view);
+            start_child.set_visible(0);
+            content.add_child_view(Some(&mut start_child));
+            content_layout.set_flex_for_view(Some(&mut start_child), 0);
+
             let assistant_url = format!("{ui_url}&surface=assistant");
             let mut assistant_client = client();
             let mut assistant_delegate = AssistantViewDelegate::new();
@@ -961,6 +1013,7 @@ wrap_window_delegate! {
                 s.content = Some(content.clone());
                 s.content_layout = Some(content_layout);
                 s.chrome_view = Some(chrome_view.clone());
+                s.start_view = Some(start_view);
                 s.assistant_view = Some(assistant_view);
             });
 
@@ -996,10 +1049,29 @@ wrap_window_delegate! {
                 s.content_layout = None;
                 s.chrome_view = None;
                 s.chrome_browser = None;
+                s.start_view = None;
+                s.start_browser = None;
                 s.assistant_view = None;
                 s.assistant_browser = None;
             });
             quit_message_loop();
+        }
+    }
+}
+
+wrap_browser_view_delegate! {
+    struct StartViewDelegate {}
+
+    impl ViewDelegate {}
+
+    impl BrowserViewDelegate {
+        fn browser_runtime_style(&self) -> RuntimeStyle {
+            RuntimeStyle::ALLOY
+        }
+
+        fn on_browser_created(&self, _browser_view: Option<&mut BrowserView>, browser: Option<&mut Browser>) {
+            let browser = browser.cloned();
+            with_state(|s| s.start_browser = browser);
         }
     }
 }

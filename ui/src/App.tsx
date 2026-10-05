@@ -131,6 +131,13 @@ export default function App() {
           </button>
         )}
 
+        <button className="nav home-nav" title="Open Rovuka start page in a new tab" aria-label="Open Rovuka start page"
+          onClick={() => host.send({ type: 'newTab' })}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+            <path d="m3 10 9-7 9 7M5 9v11h5v-6h4v6h5V9" strokeLinejoin="round" strokeLinecap="round" />
+          </svg>
+        </button>
+
         {findingsOpen && <span className="workspace-indicator" role="status">Research workspace</span>}
         <div className="omnibox">
           <input

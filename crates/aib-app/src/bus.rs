@@ -19,6 +19,7 @@ static EVENTS: OnceLock<broadcast::Sender<Event>> = OnceLock::new();
 /// Last tab snapshot, replayed to newly connected UIs.
 static LAST_TABS: Mutex<Option<Event>> = Mutex::new(None);
 static LAST_LAYOUT: Mutex<Option<Event>> = Mutex::new(None);
+static LAST_WORKSPACE: Mutex<Option<Event>> = Mutex::new(None);
 static AGENT: OnceLock<Arc<crate::agent::Service>> = OnceLock::new();
 
 pub fn set_agent(service: Arc<crate::agent::Service>) {
@@ -45,6 +46,7 @@ pub fn subscribe() -> (Vec<Event>, broadcast::Receiver<Event>) {
         [
             LAST_TABS.lock().unwrap().clone(),
             LAST_LAYOUT.lock().unwrap().clone(),
+            LAST_WORKSPACE.lock().unwrap().clone(),
         ]
         .into_iter()
         .flatten()
@@ -59,6 +61,9 @@ pub fn emit(event: Event) {
     }
     if matches!(event, Event::AssistantLayout { .. }) {
         *LAST_LAYOUT.lock().unwrap() = Some(event.clone());
+    }
+    if matches!(event, Event::AssistantWorkspace { .. }) {
+        *LAST_WORKSPACE.lock().unwrap() = Some(event.clone());
     }
     let _ = events().send(event);
 }

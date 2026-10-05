@@ -1,6 +1,7 @@
 // Mirror of crates/aib-ipc/src/lib.rs. Keep in sync.
 
 export type TabId = number
+export type AssistantPanel = 'chat' | 'task' | 'local' | 'safety' | 'settings'
 
 export type Command =
   | { type: 'newTab'; url?: string }
@@ -12,8 +13,10 @@ export type Command =
   | { type: 'reload'; tabId?: TabId }
   | { type: 'stop'; tabId?: TabId }
   | { type: 'focusContent' }
+  | { type: 'focusOmnibox' }
   | { type: 'showDevTools'; tabId?: TabId }
   | { type: 'toggleAssistant' }
+  | { type: 'openAssistant'; panel: AssistantPanel; goal?: string }
   | { type: 'setAssistantExpanded'; expanded: boolean }
   | { type: 'getPageText'; requestId: string }
 
@@ -48,6 +51,7 @@ export type HostEvent =
   | { type: 'download'; download: DownloadInfo }
   | { type: 'focusOmnibox' }
   | { type: 'assistantLayout'; expanded: boolean }
+  | { type: 'assistantWorkspace'; requestId: string; panel: AssistantPanel; goal: string | null }
   | {
       type: 'pageText'
       requestId: string
