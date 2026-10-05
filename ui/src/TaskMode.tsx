@@ -5,18 +5,23 @@ import { taskActive as active, type Task, type TaskStatus } from './taskTypes.ts
 import ResearchResults, { SearchTrail } from './ResearchResults.tsx'
 import SafetyNotice from './SafetyNotice.tsx'
 import TaskDiagnostic, { DiagnosticActions } from './TaskDiagnostic.tsx'
+import { OperationApproval, OperationTrail } from './OperatorReview.tsx'
 
 const labels: Record<TaskStatus, string> = {
   running: 'Working', awaitingApproval: 'Your decision', completed: 'Your results are ready', stopped: 'Stopped', failed: 'Could not finish',
   needsInput: 'More details needed', noEvidence: 'No verified result',
 }
 
-export default function TaskMode({ onActive, expanded, initialGoal = '', startFresh = false }: { onActive: (active: boolean) => void; expanded: boolean; initialGoal?: string; startFresh?: boolean }) {
+export default function TaskMode({ onActive, expanded, initialGoal = '', initialPrepare = false, startFresh = false }: { onActive: (active: boolean) => void; expanded: boolean; initialGoal?: string; initialPrepare?: boolean; startFresh?: boolean }) {
   const [goal, setGoal] = useState(initialGoal)
   const [sharePage, setSharePage] = useState(false)
-  const [startMode, setStartMode] = useState<'webSearch' | 'currentPage'>('webSearch')
+  const [mode, setMode] = useState<'research' | 'prepare'>(initialPrepare ? 'prepare' : 'research')
+  const [startMode, setStartMode] = useState<'webSearch' | 'currentPage'>(initialPrepare ? 'currentPage' : 'webSearch')
   const [compareOptions, setCompareOptions] = useState(true)
   const [task, setTask] = useState<Task | null>(null)
+  const [savedFindings, setSavedFindings] = useState<Task | null>(null)
+  const [showSavedFindings, setShowSavedFindings] = useState(false)
+  const findingsFor = useRef('')
   const [error, setError] = useState('')
   const [connectionError, setConnectionError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -95,6 +100,13 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', startFr
           }
           setReady(true)
           setConnectionError('')
+          if (next?.mode === 'prepare' && findingsFor.current !== next.id) {
+            const findings = await apiRequest<Task | null>('/api/agent/findings', { signal: controller.signal })
+            if (!cancelled && version === generation.current) {
+              findingsFor.current = next.id
+              setSavedFindings(findings)
+            }
+          }
         }
       } catch (reason) {
         if (!cancelled) setConnectionError(reason instanceof Error ? reason.message : String(reason))
@@ -116,7 +128,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', startFr
 
   useEffect(() => { onActive(active(task) || busy) }, [task, busy, onActive])
   useEffect(() => {
-    if (!showSetup && task && (task.status === 'completed' || task.status === 'failed' || task.status === 'noEvidence') && presented.current !== task.id) {
+    if (!showSetup && task && task.mode !== 'prepare' && (task.status === 'completed' || task.status === 'failed' || task.status === 'noEvidence') && presented.current !== task.id) {
       presented.current = task.id
       host.send({ type: 'setAssistantExpanded', expanded: true })
     }
@@ -167,14 +179,19 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', startFr
   const newTask = () => {
     host.send({ type: 'setAssistantExpanded', expanded: false })
     setShowSetup(true)
+    setShowSavedFindings(false)
     window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('#task-goal')?.focus(), 0)
   }
   const retryTask = () => {
     setGoal(task?.conversation.filter(message => message.role === 'user').map(message => message.content).join('\n') || '')
     setSharePage(false)
+    setMode(task?.mode || 'research')
     newTask()
   }
-  if (expanded && task && !active(task) && !showSetup) {
+  if (expanded && showSavedFindings && savedFindings) {
+    return <ResearchResults task={savedFindings} onBack={() => { setShowSavedFindings(false); host.send({ type: 'setAssistantExpanded', expanded: false }) }} onNew={newTask} onRetry={newTask} />
+  }
+  if (expanded && task && task.mode !== 'prepare' && !active(task) && !showSetup) {
     return <ResearchResults task={task} onBack={() => host.send({ type: 'setAssistantExpanded', expanded: false })} onNew={newTask} onRetry={retryTask} />
   }
 
@@ -185,37 +202,54 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', startFr
         <span className="local-eyebrow">Find your next step</span>
         <button className="assistant-secondary" onClick={() => host.send({ type: 'setAssistantExpanded', expanded: !expanded })}>
           {expanded ? 'Show browser' : task && !active(task) && !showSetup
-            ? task.answer ? 'View findings' : 'View research trail'
+            ? task.mode === 'prepare' ? 'View preparation' : task.answer ? 'View findings' : 'View research trail'
             : 'Expand task'}
         </button>
       </div>
+      {savedFindings && !active(task) && <button className="assistant-secondary operator-return-findings" onClick={() => {
+        setShowSavedFindings(true)
+        host.send({ type: 'setAssistantExpanded', expanded: true })
+      }}>Return to previous research findings</button>}
       {showSetup && <div className="task-intro">
         <span className="local-eyebrow">Intent → evidence → decision</span>
         <h2>Give the web a goal.</h2>
         <p>Find concrete options with direct links. Travel pairs flights and hotels; shopping compares products. Comparable observed prices sort lowest first.</p>
         <span className="local-badge">6 pages max · You control research permissions</span>
-        <p className="privacy-note">Reader preview: no flight/hotel form filling or booking. Dates and travelers are needed for availability research. Prices on search pages are not confirmed quotes.</p>
+        <p className="privacy-note">Research stays read-only. Optional preparation can fill public search fields and filters, with one approval per action. No bookings or payments. Unsupported website widgets require manual use.</p>
       </div>}
       {showSetup && <form className="task-form" onSubmit={event => {
         event.preventDefault()
-        void send('/api/agent', { goal, sharePage, startMode, compareOptions }).then(ok => { if (ok) setShowSetup(false) })
+        void send('/api/agent', { goal, sharePage, startMode, compareOptions: mode === 'research' && compareOptions, mode }).then(ok => {
+          if (ok) { setShowSetup(false); if (mode === 'prepare') host.send({ type: 'setAssistantExpanded', expanded: false }) }
+        })
       }}>
-        <label htmlFor="task-goal">What do you want to find out?</label>
+        <label htmlFor="task-mode">Task capability</label>
+        <select id="task-mode" value={mode} disabled={active(task) || busy} onChange={event => {
+          const next = event.target.value === 'prepare' ? 'prepare' : 'research'
+          setMode(next)
+          setStartMode(next === 'prepare' ? 'currentPage' : 'webSearch')
+          setSharePage(false)
+        }}>
+          <option value="research">Research only (default)</option>
+          <option value="prepare">Prepare public search fields - approval for every action</option>
+        </select>
+        <label htmlFor="task-goal">{mode === 'prepare' ? 'What should I prepare on this page?' : 'What do you want to find out?'}</label>
         <textarea id="task-goal" rows={3} value={goal} disabled={active(task) || busy}
-          maxLength={5000} placeholder="Find the key details, follow useful links, and explain the options with sources."
+          maxLength={5000} placeholder={mode === 'prepare' ? 'Prepare public search fields with exact dates and guest/filter values, then stop before booking.' : 'Find the key details, follow useful links, and explain the options with sources.'}
           onChange={event => setGoal(event.target.value)} />
         <label htmlFor="task-start">Starting point</label>
-        <select id="task-start" value={startMode} disabled={active(task) || busy}
+        <select id="task-start" value={startMode} disabled={mode === 'prepare' || active(task) || busy}
           onChange={event => setStartMode(event.target.value === 'currentPage' ? 'currentPage' : 'webSearch')}>
           <option value="webSearch">Search the web (recommended)</option>
-          <option value="currentPage">Research the current page</option>
+          <option value="currentPage">{mode === 'prepare' ? 'Prepare the current public page' : 'Research the current page'}</option>
         </select>
-        <label htmlFor="task-format">Result format</label>
+        {mode === 'research' && <><label htmlFor="task-format">Result format</label>
         <select id="task-format" value={compareOptions ? 'options' : 'brief'} disabled={active(task) || busy}
           onChange={event => setCompareOptions(event.target.value === 'options')}>
           <option value="options">Actionable options · prices & direct links</option>
           <option value="brief">Research brief / explanation</option>
-        </select>
+        </select></>}
+        {mode === 'prepare' && <p className="operator-caution">Opt-in operator preview: up to 12 exact actions on this public page and its approved links. Supply literal dates and filter values, for example 2026-11-20 and 2 adults. Each action is reviewed before execution. Existing form values are not shared with the model; website scripts can still send entered data. No POST or non-search submissions.</p>}
         <p className="privacy-note">{startMode === 'webSearch'
           ? 'Plans a search without reading or sharing the starting tab. You approve its query and URL before opening Google; this replaces the page in your active tab.'
           : `Reads ${pageTitle || 'your active webpage'}, not the whole web. Choose Search the web if this page is unrelated.`}
@@ -239,8 +273,8 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', startFr
                 {working && <span className="task-working-dots" aria-hidden="true"><i /><i /><i /></span>}
                 {connectionError && active(task) ? 'Connection interrupted' : labels[task.status]}
               </span>
-              {!active(task) && <h3>Research conversation</h3>}
-              <p>{task.model} · {task.pagesRead}/{task.maxSteps} pages</p>
+              {!active(task) && <h3>{task.mode === 'prepare' ? 'Preparation conversation' : 'Research conversation'}</h3>}
+              <p>{task.model} · {task.pagesRead}/{task.maxSteps} pages{task.mode === 'prepare' ? ' · Preparation preview' : ''}</p>
               {task.status === 'running' && <div className="task-live-step">
                 <strong aria-live="polite">{connectionError ? 'Status updates are unavailable; reconnecting.' : latestStep}</strong>
                 {!connectionError && <small>{stepSeconds}s on this step · {stepSeconds >= 20 ? 'Still waiting; Stop remains available.' : 'Updates appear as each step completes.'}</small>}
@@ -278,7 +312,10 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', startFr
             <small>Same conversation. Your earlier details and evidence are kept.</small>
           </form>}
           {task.pending && (
-            <div className="task-approval" ref={confirmation} tabIndex={-1} role="region" aria-label="Navigation approval">
+            <div className="task-approval" ref={confirmation} tabIndex={-1} role="region" aria-label={task.pending.kind === 'operation' ? 'Exact page action approval' : 'Navigation approval'}>
+              {task.pending.operation ? <OperationApproval task={task} busy={busy} onApprove={allow => void send('/api/agent/approve', {
+                taskId: task.id, approvalId: task.pending?.id, allow,
+              })} /> : <>
               <span className="local-eyebrow">Your approval is required</span>
               <h3>{task.pending.kind === 'search' ? 'Run this web search?' : task.pending.kind === 'redirect' ? 'Follow this redirect to another website?' : 'Follow this link?'}</h3>
               <p>{task.pending.reason}</p>
@@ -288,27 +325,32 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', startFr
                   onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: false })}>Decline & stop</button>
                 <button className="assistant-primary approval-allow" disabled={busy}
                   onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true })}>Approve navigation</button>
-                <button className="assistant-primary approval-allow-all" disabled={busy}
+                {task.mode !== 'prepare' && <button className="assistant-primary approval-allow-all" disabled={busy}
                   onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true, allowAllResearch: true })}>Allow all research for this task</button>
+                }
               </div>
-              <p className="approval-scope">Allow all covers up to six page reads across websites in this run, including sharing their content with your model. It never authorizes bookings, buying, form submissions, uploads or downloads. You can revoke it or stop at any time.</p>
+              <p className="approval-scope">{task.mode === 'prepare'
+                ? 'This approves only this exact navigation. Research grants never apply to preparation. Further page actions require separate approvals; no booking, payment, messages or non-search submissions are authorized.'
+                : 'Allow all covers up to six page reads across websites in this run, including sharing their content with your model. It never authorizes bookings, buying, form submissions, uploads or downloads. You can revoke it or stop at any time.'}</p>
               <details><summary>Navigation & privacy details</summary>
                 <p className="privacy-note">This replaces the page in this tab and shares its content with your model. Same-site redirects are followed; redirects to another website pause for approval (or your research permission). Checkout/account pages, form submissions, popups and downloads are blocked. Normal site scripts, their network requests and signed-in cookies still apply; this is not an isolated browsing profile.</p>
               </details>
+              </>}
             </div>
           )}
+          <OperationTrail task={task} />
           {task.error && <article className="task-error" ref={resultCard} tabIndex={-1} aria-label="Task failure" role="alert">
             <strong>Task failed without a final answer</strong><p>{task.error}</p>
             <TaskDiagnostic task={task} />
-            <p>No booking was made. Start a new task to retry; your earlier conversation is shown above.</p>
+            <p>{task.mode === 'prepare' ? 'No booking or payment was authorized. Already executed actions are not undone.' : 'No booking was made.'} Start a new task to retry; your earlier conversation is shown above.</p>
             <DiagnosticActions task={task} />
           </article>}
           {task.message && task.status !== 'needsInput' && <article className="task-result" ref={resultCard} tabIndex={-1} aria-label="Task guidance">
-            <h3>I could not verify this</h3>
+            <h3>{task.mode === 'prepare' ? 'Preparation requires manual handling' : 'I could not verify this'}</h3>
             <div className="chat-text">{task.message}</div>
-            <p className="privacy-note">This is not a completed research result. No booking was made.</p>
+            <p className="privacy-note">{task.mode === 'prepare' ? 'Unsupported actions require manual use. No booking or payment was authorized; any already executed actions remain on the page.' : 'This is not a completed research result. No booking was made.'}</p>
           </article>}
-          {task.answer && <article className="task-result" ref={resultCard} tabIndex={-1} aria-label="Research brief">
+          {task.answer && task.mode !== 'prepare' && <article className="task-result" ref={resultCard} tabIndex={-1} aria-label="Research brief">
             <span className="local-eyebrow">Your research brief</span>
             <h3>{task.report?.title || 'Here’s what I found'}</h3>
             <div className="chat-text">{task.report?.summary || task.answer}</div>
@@ -325,12 +367,12 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', startFr
           {!active(task) && <>
             <div className="task-approval-actions">
               <button className="assistant-primary" onClick={() => host.send({ type: 'setAssistantExpanded', expanded: true })}>
-                {task.answer ? 'View findings' : 'View research trail'}
+                {task.mode === 'prepare' ? 'View preparation' : task.answer ? 'View findings' : 'View research trail'}
               </button>
               <button className="assistant-secondary" onClick={newTask}>Start a new task</button>
               {task.error && <button className="assistant-secondary" onClick={retryTask}>Retry with my details</button>}
             </div>
-            <p className="privacy-note">Tasks and conversation stay in memory for this browser session only. A new task replaces this run. This is a reader agent, not a form-filling or purchasing agent.</p>
+            <p className="privacy-note">Tasks and conversation stay in memory for this browser session only. Preparation retains your previous research findings. Research permissions never authorize page actions; purchases and bookings are not automated.</p>
           </>}
           <div className="task-research-meta">
             <details className="task-activity" ref={activityPanel}>
@@ -354,7 +396,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', startFr
                   {' · '}{event.decision}{event.url && <small className="permission-url">{event.url}</small>}
                 </li>)}
               </ol></>}
-              <p className="privacy-note">Starting point: {task.startMode === 'webSearch' ? 'Web search (starting tab not read)' : 'Current page'}. No forms filled or bookings made. Six-page and ten-minute limits include replies.</p>
+              <p className="privacy-note">Starting point: {task.startMode === 'webSearch' ? 'Web search (starting tab not read)' : 'Current page'}. {task.mode === 'prepare' ? 'Only exact approved public search actions; no transactions authorized.' : 'No forms filled or bookings made.'} Six-page and ten-minute limits include replies.</p>
             </details>
             <SearchTrail task={task} />
             {!task.error && <TaskDiagnostic task={task} />}

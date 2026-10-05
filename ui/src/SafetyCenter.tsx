@@ -13,6 +13,8 @@ interface AuditRecord {
   privacy: { redactions: number; blockedLinks: number }
   origins: string[]
   events: { at: string; decision: string; origin: string | null }[]
+  actions: number
+  mode: 'research' | 'prepare'
 }
 
 interface AuditOverview {
@@ -86,16 +88,16 @@ export default function SafetyCenter() {
     <header className="safety-heading">
       <span className="local-eyebrow">Built-in boundaries</span>
       <h2>Your web. Under your control.</h2>
-      <p>Read-only research, a native privacy shield, and a record that stays on this device.</p>
+      <p>Read-only research, exact approvals for optional preparation, a native privacy shield, and an audit on this device.</p>
     </header>
     <div className="safety-protections" aria-label="Research protections">
       <article><strong>Private values stay masked</strong><p>Recognizable passwords, API keys, one-time codes and card numbers are removed before model calls and diagnostic logging. Your saved API key is used only to authenticate your chosen model.</p></article>
-      <article><strong>Research is not permission to buy</strong><p>Native checks block sensitive URLs, checkout/account changes, forms, popups and downloads during tasks. Allow all covers research only and expires with that run.</p></article>
+      <article><strong>Research is not permission to act</strong><p>Native checks block sensitive URLs, checkout/account changes, popups and downloads. Optional preparation requires a separate, single-use approval for each public search action. Allow all research never covers page actions.</p></article>
       <article><strong>Stop means take over</strong><p>Stop, manual navigation and tab changes cancel the run and invalidate pending approvals. An already approved page load may still finish.</p></article>
     </div>
     <details className="safety-limits"><summary>Important limits</summary>
       <p>Detection is not exhaustive and does not remove all personal information. Page data remains untrusted; a separate quarantined LLM reader and critic are not implemented. Website scripts and signed-in cookies remain active. The development build is not production-sandboxed.</p>
-      <p>No forms, purchases or bookings are automated. Never share a page that contains information you do not intend to send to your selected model. A local runtime may itself use the network.</p>
+      <p>Preparation supports public search fields, filters and reviewed GET searches, not arbitrary forms, purchases or bookings. Website scripts may transmit typed values immediately; this is not network isolation. Never share a page you do not intend to send to your selected model. A local runtime may itself use the network.</p>
     </details>
     <section className="safety-audit" aria-label="Local task audit">
       <div className="safety-audit-heading"><div><span className="local-eyebrow">On this device only</span><h3>Task audit</h3></div>
@@ -114,7 +116,7 @@ export default function SafetyCenter() {
               <time dateTime={record.startedAt}>{new Date(record.startedAt).toLocaleString()}</time>
               <small>{record.pagesRead} pages · {record.options} options · {record.privacy.redactions} masked</small>
             </summary>
-            <p>Run {record.id.slice(0, 8)} · {record.searches} searches · {record.privacy.blockedLinks} sensitive links excluded</p>
+            <p>Run {record.id.slice(0, 8)} · {record.mode === 'prepare' ? 'Preparation' : 'Research'} · {record.searches} searches · {record.actions} page actions · {record.privacy.blockedLinks} sensitive links excluded</p>
             {record.origins.length > 0 && <div className="safety-origins">{record.origins.map(origin => <span key={origin}>{origin}</span>)}</div>}
             {record.events.length === 0 ? <p>No navigation permissions were issued.</p> : <ol>
               {record.events.map((event, index) => <li key={index}>

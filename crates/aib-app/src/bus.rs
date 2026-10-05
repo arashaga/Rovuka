@@ -36,6 +36,22 @@ pub fn task_active(id: &str) -> bool {
     AGENT.get().is_some_and(|service| service.task_active(id))
 }
 
+pub fn preparing(id: &str) -> bool {
+    AGENT.get().is_some_and(|service| service.preparing(id))
+}
+
+pub fn claim_operation(
+    id: &str,
+    approval_id: &str,
+    tab_id: u32,
+    url: &str,
+) -> anyhow::Result<crate::agent::operator::Proposal> {
+    AGENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("The native agent is unavailable"))?
+        .claim_operation(id, approval_id, tab_id, url)
+}
+
 fn events() -> &'static broadcast::Sender<Event> {
     EVENTS.get_or_init(|| broadcast::channel(256).0)
 }

@@ -1,0 +1,24 @@
+.operator-review, .operator-trail { min-width: 0; }
+.operator-exact-action { margin: 16px 0; padding: 16px; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-bg-elevated); }
+.operator-exact-action div, .operator-search-fields dl div { display: grid; gap: 4px; margin-bottom: 12px; min-width: 0; }
+.operator-exact-action div:last-child { margin-bottom: 0; }
+.operator-exact-action dt, .operator-search-fields dt { font-size: 11px; color: var(--cp-text-muted); font-weight: 700; }
+.operator-exact-action dd, .operator-search-fields dd { margin: 0; overflow-wrap: anywhere; }
+.operator-exact-action code { display: block; font: 12px/1.6 Consolas, "Courier New", Courier, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.operator-caution { color: var(--cp-text-muted); font-size: 12px; line-height: 1.6; }
+.operator-review .approval-choices { position: static; }
+.operator-search-fields { padding: 12px; border: 1px solid var(--cp-border); border-radius: 10px; }
+.operator-search-fields summary { font-size: 12px; font-weight: 700; cursor: pointer; }
+.operator-search-fields dl { margin-bottom: 0; }
+.operator-trail { padding: 16px; border: 1px solid var(--cp-border); border-radius: 16px; background: var(--cp-surface); margin: 16px 0; }
+.operator-trail h3 { margin-top: 0; }
+.operator-trail h3 span { display: block; margin-top: 4px; color: var(--cp-text-muted); font-size: 11px; font-weight: 400; }
+.operator-trail ol { list-style: none; margin: 16px 0; padding: 0; display: grid; gap: 8px; }
+.operator-trail li { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--cp-border); border-radius: 10px; overflow-wrap: anywhere; }
+.operator-trail li code { color: var(--cp-text-muted); white-space: pre-wrap; }
+.operator-action-state { color: var(--cp-text-muted); font-size: 11px; text-transform: capitalize; }
+.operator-trail li[data-status="executed"] .operator-action-state { color: var(--cp-success); }
+.operator-trail li[data-status="stale"] .operator-action-state, .operator-trail li[data-status="failed"] .operator-action-state { color: var(--cp-danger); }
+.operator-trail li[data-status="awaitingApproval"] { border-color: var(--cp-accent); background: var(--cp-accent-soft); }
+.operator-return-findings { width: 100%; margin: 8px 0; min-height: 40px; }
+.option-prepare { margin-top: 8px; font-size: 12px; }

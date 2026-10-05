@@ -147,6 +147,10 @@ pub fn start() -> anyhow::Result<ServerInfo> {
                     )
                     .route("/api/agent/stop", post(agent_api::stop).options(preflight))
                     .route(
+                        "/api/agent/findings",
+                        get(agent_api::findings).options(preflight),
+                    )
+                    .route(
                         "/api/agent/revoke-research",
                         post(agent_api::revoke_research).options(preflight),
                     )

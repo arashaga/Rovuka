@@ -92,6 +92,13 @@ pub struct PermissionEvent {
 }
 
 impl PermissionEvent {
+    pub fn operation(decision: &str, url: Option<String>) -> Self {
+        let mut event = Self::new(decision, url);
+        event.scope =
+            "One exact public page action only; no transaction or submission authority".into();
+        event
+    }
+
     pub fn new(decision: &str, url: Option<String>) -> Self {
         let at = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
             Ok(duration) => duration.as_millis().to_string(),

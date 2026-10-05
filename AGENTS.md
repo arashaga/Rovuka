@@ -14,6 +14,23 @@ the Rust types, `decision_schema()` and `INSTRUCTION` together. Travel URLs (`tf
 the reader (`perception.js`) or travel instructions, also run
 `node .\scripts\test-agent.cjs --live-web` and inspect prices, not just status.
 
+Preparation has a separate strict `browser_operator` protocol in `operator.rs`
+and a fixed isolated-world executor in `operator.js`. Keep its schema, parser,
+native policy, control descriptions, UI review and tests aligned. Model output
+must never supply executable scripts, selectors, coordinates or navigation URLs.
+Research remains the default; research grants must never authorize preparation.
+All operations require exact, expiring, single-use native permits, successful
+audit persistence and final document/control/value revalidation.
+
+Operator changes must pass `node .\scripts\test-agent.cjs --operator-only` and
+the full native suite after rebuilding. Preserve the original travel price-card
+compactness, separate result tabs, retained findings and reader protocol.
+Exercise permit replay/expiry/mismatches, replaced nodes, property-only value
+drift, same-URL reload, manual input, cancellation, audit failure and action/page
+bounds. Growing action history must not enlarge the sticky stop header or hide
+reviewed values behind approval buttons. Do not describe this public-search
+preview as a general form operator, transaction firewall or complete sandbox.
+
 Privacy/audit changes must pass `node .\scripts\test-agent.cjs --safety-only`
 after rebuilding. Native fixtures isolate `AIB_AUDIT_DIR` from the real history.
 Start-page/assistant-shortcut changes must also pass

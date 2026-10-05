@@ -44,6 +44,7 @@ export default function Assistant() {
   const [panel, setPanel] = useState<'chat' | 'local' | 'task' | 'safety'>('chat')
   const [taskActive, setTaskActive] = useState(false)
   const [taskGoal, setTaskGoal] = useState('')
+  const [taskPrepare, setTaskPrepare] = useState(false)
   const [taskDraftKey, setTaskDraftKey] = useState('')
   const [workspaceRequest, setWorkspaceRequest] = useState<Extract<HostEvent, { type: 'assistantWorkspace' }> | null>(null)
   const lastWorkspaceRequest = useRef('')
@@ -112,6 +113,7 @@ export default function Assistant() {
     setError('')
     if (workspaceRequest.panel === 'task') {
       setTaskGoal(workspaceRequest.goal?.trim() || '')
+      setTaskPrepare(workspaceRequest.prepare === true)
       setTaskDraftKey(workspaceRequest.requestId)
     }
     setWorkspaceRequest(null)
@@ -142,6 +144,7 @@ export default function Assistant() {
   const researchWeb = (goal: string) => {
     if (busy || taskActive) return
     setTaskGoal(goal.trim())
+    setTaskPrepare(false)
     setTaskDraftKey(crypto.randomUUID())
     setSettingsOpen(false)
     host.send({ type: 'setAssistantExpanded', expanded: false })
@@ -249,14 +252,14 @@ export default function Assistant() {
 
       {!expanded && <nav className="assistant-tabs" aria-label="Assistant workspace">
         <button aria-pressed={panel === 'chat'} disabled={busy || taskActive} onClick={() => setPanel('chat')}>Ask this page</button>
-        <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setTaskGoal(''); setTaskDraftKey(''); setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
+        <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setTaskGoal(''); setTaskPrepare(false); setTaskDraftKey(''); setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
         <button aria-pressed={panel === 'local'} disabled={busy || taskActive} onClick={() => setPanel('local')}>Local models</button>
         <button aria-pressed={panel === 'safety'} disabled={busy || taskActive} onClick={() => { setPanel('safety'); setSettingsOpen(false) }}>Safety</button>
       </nav>}
 
       {workspaceRequest && busy && <p className="assistant-shortcut-notice" role="status">Your start-page shortcut will open when this response finishes.</p>}
       {panel === 'task' ? (
-        <TaskMode key={taskDraftKey} onActive={setTaskActive} expanded={expanded} initialGoal={taskGoal} startFresh={!!taskDraftKey} />
+        <TaskMode key={taskDraftKey} onActive={setTaskActive} expanded={expanded} initialGoal={taskGoal} initialPrepare={taskPrepare} startFresh={!!taskDraftKey} />
       ) : panel === 'local' ? (
         <LocalModels settings={settings} onActivate={(saved) => {
           setSettings(saved)

@@ -1,4 +1,13 @@
 export type TaskStatus = 'running' | 'awaitingApproval' | 'completed' | 'stopped' | 'failed' | 'needsInput' | 'noEvidence'
+export type OperationKind = 'fill' | 'select' | 'click' | 'scroll' | 'submitSearch'
+
+export interface OperationPreview {
+  kind: OperationKind
+  target: string
+  value: string | null
+  destination: string | null
+  fields: { name: string; value: string }[]
+}
 
 export interface Source {
   id: number
@@ -39,7 +48,7 @@ export interface Task {
   status: TaskStatus
   steps: string[]
   sources: Source[]
-  pending: { id: string; url: string; reason: string; kind: 'search' | 'link' | 'redirect' } | null
+  pending: { id: string; url: string; reason: string; kind: 'search' | 'link' | 'redirect' | 'operation'; operation: OperationPreview | null } | null
   answer: string | null
   error: string | null
   maxSteps: number
@@ -60,6 +69,8 @@ export interface Task {
   privacy: { redactions: number; blockedLinks: number }
   auditEnabled: boolean
   auditError: string | null
+  mode: 'research' | 'prepare'
+  actions: { id: string; kind: OperationKind; target: string; value: string | null; status: 'awaitingApproval' | 'approved' | 'executed' | 'stale' | 'failed' | 'cancelled' | 'declined' }[]
 }
 
 export const taskActive = (task: Task | null) =>

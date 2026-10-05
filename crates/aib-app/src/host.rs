@@ -42,6 +42,7 @@ struct AgentGuard {
     redirect_proposal: Option<String>,
     /// Same-site redirects followed during this lease (cumulative, for the activity trail).
     followed: Vec<String>,
+    preparing: bool,
 }
 
 const MAX_PAGE_REDIRECTS: u8 = 8;
@@ -211,6 +212,11 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
             tab_id,
             expected_url,
             ..
+        }
+        | HostRequest::Operate {
+            tab_id,
+            expected_url,
+            ..
         } => (Some(*tab_id), Some(expected_url.as_str())),
         HostRequest::Cancel { .. } | HostRequest::End { .. } => unreachable!(),
     };
@@ -233,6 +239,7 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
             let lease = match &request {
                 HostRequest::Begin { lease_id, .. }
                 | HostRequest::Lease { lease_id, .. }
+                | HostRequest::Operate { lease_id, .. }
                 | HostRequest::Navigate { lease_id, .. } => Some(lease_id.clone()),
                 HostRequest::Call { .. } => Some(with_state(|s| {
                     s.agent_guard.as_ref().filter(|g| g.tab_id == info.id)
@@ -300,6 +307,7 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
                 return;
             }
             let _ = reply.send(result.map(|_| {
+                let preparing = crate::bus::preparing(&lease_id);
                 with_state(|s| {
                     s.agent_guard = Some(AgentGuard {
                         tab_id,
@@ -309,6 +317,7 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
                         redirects: 0,
                         redirect_proposal: None,
                         followed: Vec::new(),
+                        preparing,
                     })
                 });
                 serde_json::Value::Null
@@ -355,6 +364,40 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
                 let _ = reply.send(Err(error));
             }
         },
+        HostRequest::Operate {
+            id,
+            tab_id,
+            expected_url,
+            lease_id,
+            approval_id,
+            reply,
+        } => {
+            if reply.is_closed() {
+                return;
+            }
+            match result.and_then(|(_, browser)| {
+                let leased = with_state(|s| {
+                    s.agent_guard.as_ref().is_some_and(|guard| {
+                        guard.tab_id == tab_id && guard.lease_id == lease_id && guard.preparing
+                    })
+                });
+                if !leased {
+                    anyhow::bail!(
+                        "Preparation stopped: its matching native page lease was released"
+                    );
+                }
+                let proposal =
+                    crate::bus::claim_operation(&lease_id, &approval_id, tab_id, &expected_url)?;
+                Ok((browser, proposal.params(&lease_id)))
+            }) {
+                Ok((browser, params)) => {
+                    crate::cdp::dispatch(browser, id, "Runtime.evaluate", params, reply)
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                }
+            }
+        }
         HostRequest::Navigate {
             tab_id,
             url,
@@ -488,7 +531,11 @@ pub fn handle_command(cmd: Command) {
             }
         }
         Command::ToggleAssistant => toggle_assistant(),
-        Command::OpenAssistant { panel, goal } => {
+        Command::OpenAssistant {
+            panel,
+            goal,
+            prepare,
+        } => {
             if !with_state(|s| s.assistant_open) {
                 toggle_assistant();
             }
@@ -497,6 +544,7 @@ pub fn handle_command(cmd: Command) {
                 request_id: crate::server::random_token(),
                 panel,
                 goal,
+                prepare,
             });
             if let Some(view) = with_state(|s| s.assistant_view.clone()) {
                 view.request_focus();
@@ -1296,6 +1344,8 @@ wrap_request_handler! {
                         .is_some_and(|(ui, target)| ui.origin() == target.origin());
                     let decision = if trusted_ui {
                         Redirect::Forbidden("its destination is the trusted browser UI")
+                    } else if guard.preparing && crate::agent::operator::validate_public_url(&url).is_err() {
+                        Redirect::Forbidden("the destination is not an allowed public preparation page")
                     } else if guard.redirects >= MAX_PAGE_REDIRECTS {
                         Redirect::Forbidden("the site redirected too many times")
                     } else {

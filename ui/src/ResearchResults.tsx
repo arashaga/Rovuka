@@ -59,6 +59,11 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
     const source = task.sources.find(source => source.id === id)
     if (source) host.send({ type: 'newTab', url: source.url })
   }
+  const prepareOnPage = (url: string) => {
+    host.send({ type: 'newTab', url })
+    host.send({ type: 'openAssistant', panel: 'task', prepare: true, goal:
+      `${task.conversation.filter(message => message.role === 'user').map(message => message.content).join('\n')}\nPrepare the public search fields and filters on the page I selected using my requirements above. Stop before booking, buying or account actions.` })
+  }
   const evidence = (ids: number[]) => <div className="finding-evidence" aria-label="Supporting sources">
     {ids.map((id, index) => <button key={`${id}-${index}`} title={`${task.sources.find(source => source.id === id)?.title || `Source [${id}]`} — opens in a new tab`}
       onClick={() => openSource(id)}>Source [{id}]</button>)}
@@ -143,6 +148,10 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
             <p>{option.fit}</p>
             <p>{option.details}</p>
             <p><strong>Limitations: </strong>{option.tradeoffs}</p>
+            {option.links.filter(link => link.kind !== 'search').map((link, index) =>
+              <div key={index}><button className="assistant-secondary option-prepare"
+                title="Open a new tab and prepare an editable task; does not start or grant permission"
+                onClick={() => prepareOnPage(link.url)}>Prepare on this page - {link.label}</button></div>)}
             {offer && <><p><strong>Not included / not checked: </strong>{offer.exclusions}</p>
               {offer.components.map((component, componentIndex) => <p key={componentIndex} className="price-quote">
                 {component.name}: {money(component.unitAmountMinor, offer.currency)} × {component.quantity}.
@@ -193,7 +202,7 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
         </section>
       </div>}
       {!complete && context}
-      <footer className="findings-footer">Session-only research · Links open in new tabs · View findings returns here · Starting a new task replaces these findings</footer>
+      <footer className="findings-footer">Session-only research · Links open in new tabs · Preparation preserves these findings · A new research task replaces this run</footer>
     </div>
   </section>
 }

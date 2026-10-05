@@ -15,6 +15,9 @@ use std::{
 use tokio::sync::{oneshot, watch};
 use url::Url;
 
+#[path = "operator.rs"]
+pub(crate) mod operator;
+
 pub const MAX_STEPS: usize = 6;
 const MAX_QUESTIONS: usize = 5;
 /// Cross-site redirect hops one approved navigation may take (each separately authorized).
@@ -794,6 +797,7 @@ pub struct Approval {
     pub url: String,
     pub reason: String,
     pub kind: String,
+    pub operation: Option<operator::Preview>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -829,6 +833,8 @@ pub struct TaskView {
     pub privacy: crate::privacy::Summary,
     pub audit_enabled: bool,
     pub audit_error: Option<String>,
+    pub mode: operator::Mode,
+    pub actions: Vec<operator::ActionRecord>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -872,12 +878,27 @@ struct Task {
     stop: watch::Sender<bool>,
     approval: Option<oneshot::Sender<bool>>,
     reply: Option<oneshot::Sender<String>>,
+    operation_proposal: Option<operator::Proposal>,
+    operation_permit: Option<operator::Proposal>,
+}
+
+impl Task {
+    fn cancel_operations(&mut self) {
+        self.operation_proposal = None;
+        self.operation_permit = None;
+        for action in &mut self.view.actions {
+            if matches!(action.status.as_str(), "awaitingApproval" | "approved") {
+                action.status = "cancelled".into();
+            }
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct Service {
     task: Mutex<Option<Task>>,
     audit: Option<Arc<crate::audit::Store>>,
+    findings: Mutex<Option<TaskView>>,
 }
 
 impl Service {
@@ -885,6 +906,7 @@ impl Service {
         Self {
             task: Mutex::new(None),
             audit: Some(audit),
+            findings: Mutex::new(None),
         }
     }
 
@@ -921,6 +943,19 @@ impl Service {
             .is_some_and(|task| task.view.id == id && task.view.active())
     }
 
+    pub fn preparing(&self, id: &str) -> bool {
+        self.view().is_some_and(|view| {
+            view.id == id && view.active() && view.mode == operator::Mode::Prepare
+        })
+    }
+
+    pub fn findings(&self) -> Option<TaskView> {
+        self.findings
+            .lock()
+            .expect("findings lock poisoned")
+            .clone()
+    }
+
     pub fn start(
         self: &Arc<Self>,
         goal: String,
@@ -928,10 +963,21 @@ impl Service {
         key: Option<String>,
         start_mode: StartMode,
         compare_options: bool,
+        mode: operator::Mode,
     ) -> anyhow::Result<TaskView> {
         let mut state = self.task.lock().expect("agent lock poisoned");
         if state.as_ref().is_some_and(|task| task.view.active()) {
             bail!("A task is already active. Stop it before starting another.");
+        }
+        if mode == operator::Mode::Prepare && !matches!(start_mode, StartMode::CurrentPage) {
+            bail!("Preparation must start on the current public webpage");
+        }
+        if mode == operator::Mode::Prepare
+            && let Some(previous) = state.as_ref().filter(|task| {
+                task.view.mode == operator::Mode::Research && task.view.status == Status::Completed
+            })
+        {
+            *self.findings.lock().expect("findings lock poisoned") = Some(previous.view.clone());
         }
         if let Some(key) = &key {
             crate::privacy::remember_secret(key);
@@ -946,7 +992,11 @@ impl Service {
             goal: goal.clone(),
             model: settings.model.clone(),
             status: Status::Running,
-            steps: vec!["Starting a bounded reader task".into()],
+            steps: vec![if mode == operator::Mode::Prepare {
+                "Starting opt-in public search preparation. Every page action needs exact approval."
+            } else {
+                "Starting a bounded reader task"
+            }.into()],
             sources: vec![],
             pending: None,
             answer: None,
@@ -975,6 +1025,8 @@ impl Service {
             },
             audit_enabled: self.audit.is_some(),
             audit_error: None,
+            mode,
+            actions: vec![],
         };
         if let Some(audit) = &self.audit {
             audit.write(&view)?;
@@ -992,13 +1044,21 @@ impl Service {
             stop,
             approval: None,
             reply: None,
+            operation_proposal: None,
+            operation_permit: None,
         });
         let service = self.clone();
         tokio::spawn(async move {
             let result = tokio::select! {
                 biased;
                 _ = rx.changed() => return,
-                result = tokio::time::timeout(Duration::from_secs(600), service.run(&id, &goal, &settings, key.as_deref(), start_mode)) => {
+                result = tokio::time::timeout(Duration::from_secs(600), async {
+                    if mode == operator::Mode::Prepare {
+                        operator::run(&service, &id, &goal, &settings, key.as_deref()).await
+                    } else {
+                        service.run(&id, &goal, &settings, key.as_deref(), start_mode).await
+                    }
+                }) => {
                     result.context("Task reached its ten-minute time limit").and_then(|result| result)
                 }
             };
@@ -1009,6 +1069,7 @@ impl Service {
                     task.view.pending = None;
                     task.approval = None;
                     task.reply = None;
+                    task.cancel_operations();
                     task.view.question_id = None;
                     task.view.error = Some(format!("{error:#}"));
                     task.view.research_permission = ResearchPermission::AskEach;
@@ -1059,6 +1120,7 @@ impl Service {
             task.view.question_id = None;
             task.approval = None;
             task.reply = None;
+            task.cancel_operations();
             task.view.research_permission = ResearchPermission::AskEach;
             task.stop.send_replace(true);
         }
@@ -1079,6 +1141,11 @@ impl Service {
             .as_mut()
             .filter(|t| t.view.id == id && t.view.status == Status::AwaitingApproval)
             .context("This approval is no longer active")?;
+        if allow_all_research && task.view.mode == operator::Mode::Prepare {
+            bail!(
+                "Preparation requires a separate exact approval for every action; allow-all research cannot authorize it"
+            );
+        }
         if task
             .view
             .pending
@@ -1087,6 +1154,23 @@ impl Service {
         {
             bail!("Stale or mismatched navigation approval");
         }
+        let operation = if task
+            .view
+            .pending
+            .as_ref()
+            .is_some_and(|approval| approval.kind == "operation")
+        {
+            let proposal = task
+                .operation_proposal
+                .as_ref()
+                .context("The page-action proposal is no longer available")?;
+            if proposal.id != approval_id || proposal.expired() {
+                bail!("The exact page-action approval expired or changed");
+            }
+            Some(proposal.clone())
+        } else {
+            None
+        };
         let sender = task
             .approval
             .take()
@@ -1100,16 +1184,35 @@ impl Service {
         if allow_all_research {
             task.view.research_permission = ResearchPermission::AllResearch;
         }
-        task.view.permission_events.push(PermissionEvent::new(
+        let decision = if operation.is_some() {
+            if allow {
+                "User approved one exact page action"
+            } else {
+                "User declined page action"
+            }
+        } else {
             if !allow {
                 "User declined navigation"
             } else if allow_all_research {
                 "User allowed all research navigation for this task"
             } else {
                 "User approved one navigation"
-            },
-            url,
-        ));
+            }
+        };
+        task.view.permission_events.push(if operation.is_some() {
+            PermissionEvent::operation(decision, url)
+        } else {
+            PermissionEvent::new(decision, url)
+        });
+        if let Some(action) = task
+            .view
+            .actions
+            .iter_mut()
+            .find(|action| action.id == approval_id)
+        {
+            action.status = if allow { "approved" } else { "declined" }.into();
+        }
+        task.operation_proposal = None;
         task.view.pending = None;
         task.view.status = Status::Running;
         log_task_changes(&task.view, task.view.steps.len(), events);
@@ -1117,9 +1220,14 @@ impl Service {
         if let Some(error) = &task.view.audit_error {
             bail!("{error}");
         }
-        sender
-            .send(allow)
-            .map_err(|_| anyhow::anyhow!("The task is no longer waiting for approval"))?;
+        if allow {
+            task.operation_permit = operation;
+        }
+        if sender.send(allow).is_err() {
+            task.cancel_operations();
+            self.persist(task);
+            bail!("The task is no longer waiting for approval; no page-action permit remains");
+        }
         Ok(())
     }
 
@@ -1151,6 +1259,7 @@ impl Service {
             task.stop.send_replace(true);
             task.approval = None;
             task.reply = None;
+            task.cancel_operations();
             task.view.question_id = None;
             task.view.message = None;
             task.view.pending = None;
@@ -1252,6 +1361,7 @@ impl Service {
                 url: url.to_owned(),
                 reason,
                 kind: kind.into(),
+                operation: None,
             });
             task.view.steps.push(if kind == "redirect" {
                 "Waiting for your approval to follow the redirect".into()
@@ -2414,6 +2524,7 @@ mod tests {
                     url: "https://example.com".into(),
                     reason: "test".into(),
                     kind: "link".into(),
+                    operation: None,
                 }),
                 answer: None,
                 error: None,
@@ -2435,10 +2546,14 @@ mod tests {
                 privacy: crate::privacy::Summary::default(),
                 audit_enabled: false,
                 audit_error: None,
+                mode: operator::Mode::Research,
+                actions: vec![],
             },
             stop,
             approval: Some(approve),
             reply: None,
+            operation_proposal: None,
+            operation_permit: None,
         });
         assert!(service.approve("task1", "wrong", true, true).is_err());
         assert_eq!(

@@ -92,8 +92,8 @@ export default function StartPage() {
     <div className="start-shell">
       <section className="start-updates" aria-label="What's new">
         <div className="start-update-label"><span className="start-update-dot" />What's new</div>
-        <div className="start-update-copy"><strong>Safer research. A clearer next step.</strong>
-          <span>Privacy shield · Local task audit · Result links open new tabs</span>
+        <div className="start-update-copy"><strong>Prepare pages. Approve every step.</strong>
+          <span>Public search preparation preview · Exact-action review · Findings preserved</span>
         </div>
         <button onClick={() => open('safety')}>Explore Safety <Icon name="arrow" /></button>
       </section>
@@ -157,13 +157,13 @@ export default function StartPage() {
         <div className="start-safety-copy"><span className="start-eyebrow">Helpful by design. Boundaries by default.</span>
           <h2 id="start-safety-title">Your curiosity. Your control.</h2>
           <div className="start-safety-tags"><span>Read-only research</span><span>Scoped approvals</span><span>Local audit</span></div>
-          <p>Rovuka can read approved pages and follow approved links. It cannot buy, book or submit forms. Recognizable secrets are masked before model calls, but detection is not exhaustive.</p>
+          <p>Research stays read-only. Opt-in preparation can fill approved public search fields and open reviewed GET searches; it never authorizes purchases, bookings or other submissions. Recognizable secrets are masked before model calls, but detection is not exhaustive.</p>
           <p className="start-safety-limit">Your chosen model receives the content you agree to share. Website scripts and signed-in cookies still run; tasks are not isolated from your browsing profile.</p>
         </div>
         <button className="start-outline-button" onClick={() => open('safety')}>Review safety <Icon name="arrow" /></button>
       </section>
 
-      <footer className="start-footer"><span>Built for curiosity. Designed to keep you in control.</span><span>Rovuka · Reader preview</span></footer>
+      <footer className="start-footer"><span>Built for curiosity. Designed to keep you in control.</span><span>Rovuka · Research + preparation previews</span></footer>
     </div>
   </main>
 }

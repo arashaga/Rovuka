@@ -2,7 +2,7 @@
 
 An AI-first, local-first task browser built on Chromium (CEF) with a Rust host and a React/TypeScript chrome UI.
 
-> Status: **Phase 3 reader agent + Phase 4 privacy, permissions and local audit**. Model studio and page Q&A work; task mode can research with scoped permissions and provide numbered options with observed direct-site handoffs. Full action automation, the complete safety roadmap, bundled inference and installers are not shipped yet.
+> Status: **Reader research + privacy/audit + Safe Browser Operator preview**. Model studio and page Q&A work; research provides numbered options with observed direct-site handoffs. Opt-in preparation can fill public search fields and open reviewed GET searches, with exact approval for every action. General website automation, bookings/payments, the complete safety roadmap, bundled inference and installers are not shipped yet.
 
 Porting guidance is maintained in the local [Mac OS parity](mac-os-parity.md)
 guide, which is intentionally Git-ignored. Copy it separately when moving to
@@ -95,8 +95,9 @@ tab, not a token-bearing website in tab history. Its authenticated UI URL stays
 out of the omnibox, tab snapshots and model-facing observations. Page Q&A
 explicitly refuses to share it: open a real webpage first. Themes, responsive
 320px layouts, focusable controls and reduced-motion artwork use the existing
-Clawpilot design. Runtimes, booking/form automation and installers are still not
-bundled.
+Clawpilot design. What's new now introduces the approved public-search
+preparation preview. Runtimes, booking/non-search submission automation and
+installers are still not bundled.
 
 ## GPU context errors (Windows)
 
@@ -511,6 +512,68 @@ reader, comprehensive personal-data detection, a critic and strong transaction
 confirmation remain before broader automation. Native privacy checks and a
 durable, metadata-only audit are now implemented as described below.
 
+### Safe Browser Operator: public search preparation preview
+
+**Research only remains the default.** Preparation is a separate opt-in
+capability, not permission added to an existing research grant.
+
+1. Open a public search page, or expand **Details, costs & sources** on a
+   research option and choose **Prepare on this page**. The latter opens a new
+   provider tab and an editable draft; it does not start, share pages or approve
+   anything. Your previous completed research findings stay available.
+2. In **Ask AI → Task mode**, select **Prepare public search fields - approval
+   for every action**. Preparation starts on the current webpage, not the
+   trusted welcome page. Configure/select your model as usual.
+3. Supply literal values and ISO dates. For example:
+
+   > Prepare Cancun for 2 adults, check-in 2026-11-20 and check-out 2026-11-25.
+   > Open the search only if it is a public GET search. Stop before booking or payment.
+
+   The model must ask for an exact date or observed option label if your
+   requirements do not literally include it; it cannot invent or transform a
+   value using webpage instructions.
+4. Explicitly allow sharing task pages, then choose **Start task**. Review the
+   website, exact control and value before **Approve this action only**.
+   GET searches additionally show the full destination and every current form
+   parameter, including existing values. Each operation needs a new approval.
+5. Watch **Page actions** and live Activity. **Stop / take over**, tab changes,
+   manual navigation or trusted input on the webpage cancel further preparation.
+   An already executing approved action may finish; actions are not rolled back.
+6. Review the prepared page and continue manually. **Return to previous research
+   findings** reopens your original shortlist without another model call.
+
+Supported controls are labeled public-search text/search/date/number/time/month
+inputs, single-choice filters, limited calendar/guest/filter buttons, disclosure
+controls, observed links and 600-pixel scroll steps. Native GET searches are
+constructed from reviewed fields without clicking submit or invoking a form's
+submission handlers. Arbitrary buttons, custom widgets, POST or other form
+submissions, messages/applications, uploads/downloads, bookings/payments and
+account changes require manual use. Unsupported pages fail explicitly rather
+than gaining broader permissions.
+
+The separate strict `browser_operator` protocol accepts numeric observed control
+IDs, not model scripts, selectors, coordinates or invented URLs. Native
+single-use permits expire after two minutes and require successful audit
+persistence before execution. The isolated-world executor rechecks the exact
+document, node, URL, mutation revision and current value. Replaced controls and
+value-only changes need a fresh observation and approval; reloads cannot reuse
+an old document's controls. Limits are 12 executed actions, six page reads,
+three cross-site redirect hops per action, five clarification replies and ten
+minutes per task. **Allow all research never authorizes preparation**, including
+its cross-site redirects.
+
+Input values and opaque option values are excluded from the model-facing
+control snapshot. Approved action values remain in the session trail, not the
+durable audit; the audit adds only task mode and executed-action counts. Older
+reader audit records still load as research with zero page actions.
+
+**This is not general-purpose or transaction-safe automation.** Website scripts
+can transmit an entered value immediately using normal signed-in cookies, and
+GET requests can have side effects. Labels and URL heuristics cannot prove that
+a website is safe. A quarantined LLM reader, independent critic, isolated task
+profiles and production sandboxing are still deferred. No booking/payment is
+authorized by this preview; do not use sensitive or transactional pages.
+
 ### Phase 4 increment: privacy shield and local task audit
 
 Open **Ask AI → Safety** to review the research boundaries and local audit.
@@ -698,6 +761,21 @@ For a focused, loopback-only safety run after building:
 node .\scripts\test-agent.cjs --safety-only
 ```
 
+The full suite includes 12 operator groups: opt-in draft handoff, exact reviews,
+native dates/filters/scroll/GET parameters, retained findings, injected or
+transactional proposal rejection, stale nodes/values/documents, trusted manual
+takeover, audit-failure gating and the 12-action limit. Reviews are tested at
+320px in both themes, with bounded sticky headers, unobscured exact values and
+reduced motion. For a focused preparation run:
+
+```powershell
+node .\scripts\test-agent.cjs --operator-only
+```
+
+The unit suite also checks permit replay, wrong task/tab/URL/mode, expiry,
+approval cancellation and backward-compatible reader audit records. These are
+local mock-model/website fixtures, not a claim that every hotel site is supported.
+
 `--shutdown-only` checks native window/server/CEF shutdown with the same isolated
 fixture storage and no model request.
 
@@ -715,10 +793,11 @@ The complete local suite also runs these checks with an explicit startup URL.
 Both modes use disposable fixture storage and require a normal zero-exit
 shutdown, not forced termination.
 
-Current Windows verification: **70 workspace Rust tests and all 85 native
-browser checks pass**, including the nine start-page and 10 focused safety
-checks. UI type-check, production UI build, native build, focused default-start
-validation and graceful shutdown checks also pass.
+Current Windows verification: **79 workspace Rust tests and all 97 native
+browser checks pass**, preserving all 85 existing groups and adding 12 operator
+groups. Separate nine-check default-start and 10-check Safety runs also pass.
+UI type-check, production UI build, standard native build and graceful shutdown
+checks pass.
 These local fixtures do not certify live model accuracy or macOS readiness.
 
 It also checks comparison-format correction, observed direct destinations,
@@ -742,6 +821,8 @@ during the fixture run. The harness closes its own browser afterward.
 approval screen, including the scoped allow-all choice.
 `AIB_TEST_CONVERSATION_SCREENSHOT=<absolute image path>` saves the focused
 full-width task question/reply screen during an ordinary fixture run.
+`AIB_TEST_OPERATOR_SCREENSHOT=<absolute image path>` captures the native exact
+page-action review. Screenshots and fixture profiles are not release artifacts.
 
 ## Notes
 

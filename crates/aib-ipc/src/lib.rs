@@ -69,6 +69,8 @@ pub enum Command {
         panel: AssistantPanel,
         #[serde(default)]
         goal: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        prepare: bool,
     },
     SetAssistantExpanded {
         expanded: bool,
@@ -156,6 +158,8 @@ pub enum Event {
         request_id: String,
         panel: AssistantPanel,
         goal: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        prepare: bool,
     },
     PageText {
         request_id: String,
@@ -168,6 +172,10 @@ pub enum Event {
     },
 }
 
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
 /// Turn omnibox input into a URL: keep explicit URLs, add a scheme to
 /// host-like input, otherwise run a search.
 pub fn resolve_omnibox_input(input: &str, search_template: &str) -> String {
@@ -175,6 +183,7 @@ pub fn resolve_omnibox_input(input: &str, search_template: &str) -> String {
     if input.is_empty() {
         return "about:blank".into();
     }
+
     let lower = input.to_ascii_lowercase();
     let has_scheme = [
         "http://",
@@ -290,6 +299,7 @@ mod tests {
             Command::OpenAssistant {
                 panel: AssistantPanel::Task,
                 goal: Some("Compare headphones".into()),
+                prepare: false,
             },
             Command::Navigate {
                 tab_id: None,
@@ -336,6 +346,7 @@ mod tests {
             Command::OpenAssistant {
                 panel: AssistantPanel::Task,
                 goal: Some(goal),
+                prepare: false,
             } if goal == "Compare headphones"
         ));
         assert!(
@@ -346,10 +357,29 @@ mod tests {
                 request_id: "draft-1".into(),
                 panel: AssistantPanel::Safety,
                 goal: None,
+                prepare: false,
             })
             .unwrap(),
             r#"{"type":"assistantWorkspace","requestId":"draft-1","panel":"safety","goal":null}"#
         );
+    }
+
+    #[test]
+    fn preparation_shortcut_is_explicit_and_does_not_change_research_defaults() {
+        let command: Command = serde_json::from_str(
+            r#"{"type":"openAssistant","panel":"task","goal":"Prepare dates","prepare":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command,
+            Command::OpenAssistant { prepare: true, .. }
+        ));
+        let command: Command =
+            serde_json::from_str(r#"{"type":"openAssistant","panel":"task"}"#).unwrap();
+        assert!(matches!(
+            command,
+            Command::OpenAssistant { prepare: false, .. }
+        ));
     }
 
     #[test]

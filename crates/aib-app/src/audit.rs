@@ -34,6 +34,10 @@ pub struct Record {
     pub privacy: crate::privacy::Summary,
     pub origins: Vec<String>,
     pub events: Vec<Event>,
+    #[serde(default)]
+    pub actions: usize,
+    #[serde(default)]
+    pub mode: crate::agent::operator::Mode,
 }
 
 impl Record {
@@ -61,6 +65,12 @@ impl Record {
                 .report
                 .as_ref()
                 .map_or(0, |report| report.options.len()),
+            actions: task
+                .actions
+                .iter()
+                .filter(|action| action.status == "executed")
+                .count(),
+            mode: task.mode,
             privacy: task.privacy.clone(),
             origins,
             events: task
@@ -294,6 +304,8 @@ mod tests {
             },
             origins: vec!["https://site.test".into()],
             events: vec![],
+            actions: 0,
+            mode: crate::agent::operator::Mode::Research,
         }
     }
 
@@ -333,6 +345,16 @@ mod tests {
         );
         assert!(origin("not a URL").is_none());
         assert!(!valid_id("../other-file"));
+    }
+
+    #[test]
+    fn prior_reader_audits_load_without_operator_metadata() {
+        let mut legacy = serde_json::to_value(record(1)).unwrap();
+        legacy.as_object_mut().unwrap().remove("mode");
+        legacy.as_object_mut().unwrap().remove("actions");
+        let record: Record = serde_json::from_value(legacy).unwrap();
+        assert_eq!(record.mode, crate::agent::operator::Mode::Research);
+        assert_eq!(record.actions, 0);
     }
 
     #[test]

@@ -10,6 +10,8 @@ pub(super) struct StartRequest {
     start_mode: crate::agent::StartMode,
     #[serde(default)]
     compare_options: bool,
+    #[serde(default)]
+    mode: crate::agent::operator::Mode,
 }
 
 pub(super) async fn view(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -57,6 +59,7 @@ pub(super) async fn start(
             key,
             request.start_mode,
             request.compare_options,
+            request.mode,
         )
     })();
     with_cors(
@@ -69,6 +72,13 @@ pub(super) async fn start(
         },
         &origin,
     )
+}
+
+pub(super) async fn findings(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let Some(origin) = api_authorized(&headers, &state) else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    with_cors(Json(state.agent.findings()).into_response(), &origin)
 }
 
 #[derive(Deserialize)]

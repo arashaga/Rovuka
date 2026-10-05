@@ -73,6 +73,14 @@ pub enum HostRequest {
         lease_id: String,
         reply: Reply,
     },
+    Operate {
+        id: i32,
+        tab_id: u32,
+        expected_url: String,
+        lease_id: String,
+        approval_id: String,
+        reply: Reply,
+    },
     Cancel {
         id: i32,
     },
@@ -194,7 +202,7 @@ pub async fn inspect(tab_id: Option<u32>) -> anyhow::Result<aib_ipc::TabInfo> {
     serde_json::from_value(receive(rx).await?).context("Invalid native tab metadata")
 }
 
-async fn call(
+pub(crate) async fn call(
     tab_id: u32,
     expected_url: &str,
     method: &'static str,
@@ -339,22 +347,7 @@ pub async fn lease_state(tab_id: u32, lease_id: &str) -> anyhow::Result<LeaseSta
 }
 
 async fn read_observation(tab_id: u32, expected_url: &str) -> anyhow::Result<Observation> {
-    let tree = call(tab_id, expected_url, "Page.getFrameTree", json!({})).await?;
-    let frame_id = tree
-        .pointer("/frameTree/frame/id")
-        .and_then(JsonValue::as_str)
-        .context("Page frame is unavailable")?;
-    let world = call(
-        tab_id,
-        expected_url,
-        "Page.createIsolatedWorld",
-        json!({"frameId":frame_id,"worldName":"aib-reader"}),
-    )
-    .await?;
-    let context = world
-        .get("executionContextId")
-        .and_then(JsonValue::as_i64)
-        .context("Reader context is unavailable")?;
+    let context = isolated_world(tab_id, expected_url, "aib-reader").await?;
     let result = call(tab_id, expected_url, "Runtime.evaluate",
         json!({"expression":include_str!("perception.js"),"contextId":context,"returnByValue":true})).await?;
     if result.get("exceptionDetails").is_some() {
@@ -369,13 +362,55 @@ async fn read_observation(tab_id: u32, expected_url: &str) -> anyhow::Result<Obs
         serde_json::from_value(value).context("Invalid page observation")?;
     let tab = inspect(Some(tab_id)).await?;
     if observation.url != expected_url || tab.url != expected_url {
-        // The caller revalidates through the native guard; unapproved moves still fail there.
         return Err(PageMoved(tab.url).into());
     }
     if tab.loading {
         return Err(PageLoading.into());
     }
     Ok(observation)
+}
+
+pub(crate) async fn isolated_world(
+    tab_id: u32,
+    expected_url: &str,
+    name: &str,
+) -> anyhow::Result<i64> {
+    let tree = call(tab_id, expected_url, "Page.getFrameTree", json!({})).await?;
+    let frame_id = tree
+        .pointer("/frameTree/frame/id")
+        .and_then(JsonValue::as_str)
+        .context("Page frame is unavailable")?;
+    let world = call(
+        tab_id,
+        expected_url,
+        "Page.createIsolatedWorld",
+        json!({"frameId":frame_id,"worldName":name}),
+    )
+    .await?;
+    world
+        .get("executionContextId")
+        .and_then(JsonValue::as_i64)
+        .context("The isolated webpage context is unavailable")
+}
+
+pub async fn operate(
+    tab_id: u32,
+    expected_url: &str,
+    lease_id: &str,
+    approval_id: &str,
+) -> anyhow::Result<JsonValue> {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let _cleanup = Cleanup(id);
+    let (reply, rx) = oneshot::channel();
+    crate::bus::send_agent(HostRequest::Operate {
+        id,
+        tab_id,
+        expected_url: expected_url.into(),
+        lease_id: lease_id.into(),
+        approval_id: approval_id.into(),
+        reply,
+    });
+    receive(rx).await
 }
 
 pub async fn navigate(

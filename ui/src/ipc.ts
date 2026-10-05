@@ -16,7 +16,7 @@ export type Command =
   | { type: 'focusOmnibox' }
   | { type: 'showDevTools'; tabId?: TabId }
   | { type: 'toggleAssistant' }
-  | { type: 'openAssistant'; panel: AssistantPanel; goal?: string }
+  | { type: 'openAssistant'; panel: AssistantPanel; goal?: string; prepare?: boolean }
   | { type: 'setAssistantExpanded'; expanded: boolean }
   | { type: 'getPageText'; requestId: string }
 
@@ -51,7 +51,7 @@ export type HostEvent =
   | { type: 'download'; download: DownloadInfo }
   | { type: 'focusOmnibox' }
   | { type: 'assistantLayout'; expanded: boolean }
-  | { type: 'assistantWorkspace'; requestId: string; panel: AssistantPanel; goal: string | null }
+  | { type: 'assistantWorkspace'; requestId: string; panel: AssistantPanel; goal: string | null; prepare?: boolean }
   | {
       type: 'pageText'
       requestId: string
