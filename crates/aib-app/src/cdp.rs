@@ -14,9 +14,38 @@ use tokio::sync::oneshot;
 
 pub type Reply = oneshot::Sender<anyhow::Result<JsonValue>>;
 
+#[derive(Debug)]
+pub struct PageLoading;
+impl std::fmt::Display for PageLoading {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The task page is still loading")
+    }
+}
+impl std::error::Error for PageLoading {}
+
+/// The page moved to a URL the native guard approved (same-site redirect or same-document update).
+#[derive(Debug)]
+pub struct PageMoved(pub String);
+impl std::fmt::Display for PageMoved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The task page moved within its approved navigation")
+    }
+}
+impl std::error::Error for PageMoved {}
+
 pub enum HostRequest {
     Inspect {
         tab_id: Option<u32>,
+        reply: Reply,
+    },
+    Ready {
+        tab_id: u32,
+        expected_url: String,
+        reply: Reply,
+    },
+    Lease {
+        tab_id: u32,
+        lease_id: String,
         reply: Reply,
     },
     Begin {
@@ -236,6 +265,80 @@ pub async fn begin(tab_id: u32, expected_url: &str, lease_id: &str) -> anyhow::R
 }
 
 pub async fn observe(tab_id: u32, expected_url: &str) -> anyhow::Result<Observation> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut expected = expected_url.to_owned();
+        loop {
+            expected = wait_ready(tab_id, &expected).await?;
+            match read_observation(tab_id, &expected).await {
+                Err(error) if error.is::<PageLoading>() || error.is::<PageMoved>() => {
+                    tracing::debug!(
+                        "Page changed during observation; revalidating its approved URL before reading"
+                    );
+                }
+                result => return result,
+            }
+        }
+    })
+    .await
+    .context("The approved page did not settle for reading within 30 seconds")?
+}
+
+/// Waits for three settled samples and returns the settled URL. Only moves the native guard
+/// approved are adopted; any other URL change fails the task.
+pub async fn wait_ready(tab_id: u32, expected_url: &str) -> anyhow::Result<String> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut expected = expected_url.to_owned();
+        let mut ready = 0;
+        loop {
+            let (reply, rx) = oneshot::channel();
+            crate::bus::send_agent(HostRequest::Ready {
+                tab_id,
+                expected_url: expected.clone(),
+                reply,
+            });
+            match receive(rx).await {
+                Ok(_) => ready += 1,
+                Err(error) if error.is::<PageLoading>() => ready = 0,
+                Err(error) => match error.downcast::<PageMoved>() {
+                    Ok(PageMoved(url)) => {
+                        tracing::debug!("Adopting a guard-approved page move");
+                        expected = url;
+                        ready = 0;
+                    }
+                    Err(error) => return Err(error),
+                },
+            }
+            if ready == 3 {
+                return Ok(expected);
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .context("The task page remained loading for 30 seconds")?
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaseState {
+    pub allowed_url: String,
+    pub redirect: Option<String>,
+    pub followed: Vec<String>,
+}
+
+/// Current native guard state: approved URL, a paused cross-site redirect, and same-site
+/// redirects followed during this lease (cumulative).
+pub async fn lease_state(tab_id: u32, lease_id: &str) -> anyhow::Result<LeaseState> {
+    let (reply, rx) = oneshot::channel();
+    crate::bus::send_agent(HostRequest::Lease {
+        tab_id,
+        lease_id: lease_id.into(),
+        reply,
+    });
+    serde_json::from_value(receive(rx).await?).context("Invalid task navigation guard state")
+}
+
+async fn read_observation(tab_id: u32, expected_url: &str) -> anyhow::Result<Observation> {
     let tree = call(tab_id, expected_url, "Page.getFrameTree", json!({})).await?;
     let frame_id = tree
         .pointer("/frameTree/frame/id")
@@ -265,13 +368,41 @@ pub async fn observe(tab_id: u32, expected_url: &str) -> anyhow::Result<Observat
     let observation: Observation =
         serde_json::from_value(value).context("Invalid page observation")?;
     let tab = inspect(Some(tab_id)).await?;
-    if observation.url != expected_url || tab.url != expected_url || tab.loading {
-        bail!("The page changed during reading. Start a new task after it finishes loading.");
+    if observation.url != expected_url || tab.url != expected_url {
+        // The caller revalidates through the native guard; unapproved moves still fail there.
+        return Err(PageMoved(tab.url).into());
+    }
+    if tab.loading {
+        return Err(PageLoading.into());
     }
     Ok(observation)
 }
 
 pub async fn navigate(
+    tab_id: u32,
+    expected_url: &str,
+    url: &str,
+    lease_id: &str,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut expected = expected_url.to_owned();
+        loop {
+            expected = wait_ready(tab_id, &expected).await?;
+            match navigate_ready(tab_id, &expected, url, lease_id).await {
+                Err(error) if error.is::<PageLoading>() || error.is::<PageMoved>() => {
+                    tracing::debug!(
+                        "Page changed before navigation; revalidating its approved URL"
+                    );
+                }
+                result => return result,
+            }
+        }
+    })
+    .await
+    .context("The current page did not settle before approved navigation")?
+}
+
+async fn navigate_ready(
     tab_id: u32,
     expected_url: &str,
     url: &str,

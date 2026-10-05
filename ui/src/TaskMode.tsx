@@ -1,37 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiRequest } from './modelApi.ts'
 import { host } from './ipc.ts'
-
-type TaskStatus = 'running' | 'awaitingApproval' | 'completed' | 'stopped' | 'failed' | 'needsInput' | 'noEvidence'
-interface Task {
-  id: string
-  goal: string
-  model: string
-  status: TaskStatus
-  steps: string[]
-  sources: { id: number; url: string; title: string }[]
-  pending: { id: string; url: string; reason: string; kind: 'search' | 'link' } | null
-  answer: string | null
-  error: string | null
-  maxSteps: number
-  pagesRead: number
-  startMode: 'webSearch' | 'currentPage'
-  message: string | null
-  conversation: { role: 'user' | 'assistant'; content: string }[]
-  questionId: string | null
-  protocolIssue: string | null
-}
+import { taskActive as active, type Task, type TaskStatus } from './taskTypes.ts'
+import ResearchResults, { SearchTrail } from './ResearchResults.tsx'
+import TaskDiagnostic, { DiagnosticActions } from './TaskDiagnostic.tsx'
 
 const labels: Record<TaskStatus, string> = {
-  running: 'Working', awaitingApproval: 'Your decision', completed: 'Research brief ready', stopped: 'Stopped', failed: 'Could not finish',
+  running: 'Working', awaitingApproval: 'Your decision', completed: 'Your results are ready', stopped: 'Stopped', failed: 'Could not finish',
   needsInput: 'More details needed', noEvidence: 'No verified result',
 }
-const active = (task: Task | null) => task?.status === 'running' || task?.status === 'awaitingApproval' || task?.status === 'needsInput'
 
-export default function TaskMode({ onActive }: { onActive: (active: boolean) => void }) {
-  const [goal, setGoal] = useState('')
+export default function TaskMode({ onActive, expanded, initialGoal = '' }: { onActive: (active: boolean) => void; expanded: boolean; initialGoal?: string }) {
+  const [goal, setGoal] = useState(initialGoal)
   const [sharePage, setSharePage] = useState(false)
   const [startMode, setStartMode] = useState<'webSearch' | 'currentPage'>('webSearch')
+  const [compareOptions, setCompareOptions] = useState(true)
   const [task, setTask] = useState<Task | null>(null)
   const [error, setError] = useState('')
   const [connectionError, setConnectionError] = useState('')
@@ -40,12 +23,55 @@ export default function TaskMode({ onActive }: { onActive: (active: boolean) => 
   const [pageTitle, setPageTitle] = useState('')
   const [reply, setReply] = useState('')
   const [showSetup, setShowSetup] = useState(true)
+  const [followActivity, setFollowActivity] = useState(true)
+  const [stepSeconds, setStepSeconds] = useState(0)
+  const activityPanel = useRef<HTMLDetailsElement>(null)
+  const activityList = useRef<HTMLOListElement>(null)
+  const stepStarted = useRef(Date.now())
   const replyBox = useRef<HTMLTextAreaElement>(null)
   const confirmation = useRef<HTMLDivElement>(null)
   const resultCard = useRef<HTMLElement>(null)
   const generation = useRef(0)
   const commandBusy = useRef(false)
   const loaded = useRef(false)
+  const presented = useRef<string | null>(null)
+  const working = task?.status === 'running' && !connectionError
+  const latestStep = task?.steps.at(-1) || 'Starting your task'
+
+  useEffect(() => {
+    stepStarted.current = Date.now()
+    setStepSeconds(0)
+  }, [task?.id, task?.status, latestStep])
+  useEffect(() => {
+    if (!working) return
+    const timer = window.setInterval(() => setStepSeconds(Math.floor((Date.now() - stepStarted.current) / 1000)), 1000)
+    return () => window.clearInterval(timer)
+  }, [working])
+  useEffect(() => {
+    setFollowActivity(true)
+  }, [task?.id])
+  useEffect(() => {
+    if (task?.status !== 'running' || showSetup) {
+      if (activityPanel.current) activityPanel.current.open = false
+      return
+    }
+    if (activityPanel.current) {
+      activityPanel.current.open = true
+      const heading = activityPanel.current.closest('.task-run')?.querySelector<HTMLElement>('.task-run-heading')
+      activityPanel.current.style.scrollMarginTop = `${(heading?.offsetHeight || 140) + 16}px`
+      if (activityList.current) {
+        activityList.current.style.scrollMarginTop = `${(heading?.offsetHeight || 140) + 16}px`
+        activityList.current.scrollIntoView({ block: 'nearest', behavior: 'instant' })
+      }
+    }
+  }, [task?.status, showSetup, expanded])
+  useEffect(() => {
+    const list = activityList.current
+    if (list && followActivity && task?.status === 'running') {
+      list.scrollTop = list.scrollHeight
+      list.scrollIntoView({ block: 'nearest', behavior: 'instant' })
+    }
+  }, [task?.steps.length, followActivity, task?.status, expanded])
 
   useEffect(() => {
     let cancelled = false
@@ -57,9 +83,10 @@ export default function TaskMode({ onActive }: { onActive: (active: boolean) => 
         const next = await apiRequest<Task | null>('/api/agent', { signal: controller.signal })
         if (!cancelled && version === generation.current && !commandBusy.current) {
           setTask(next)
+          if (active(next)) setShowSetup(false)
           if (!loaded.current) {
             loaded.current = true
-            if (next) setShowSetup(false)
+            if (next && !initialGoal) setShowSetup(false)
           }
           setReady(true)
           setConnectionError('')
@@ -84,9 +111,17 @@ export default function TaskMode({ onActive }: { onActive: (active: boolean) => 
 
   useEffect(() => { onActive(active(task) || busy) }, [task, busy, onActive])
   useEffect(() => {
+    if (!showSetup && task && (task.status === 'completed' || task.status === 'failed' || task.status === 'noEvidence') && presented.current !== task.id) {
+      presented.current = task.id
+      host.send({ type: 'setAssistantExpanded', expanded: true })
+    }
+  }, [task?.status, task?.id, showSetup])
+  useEffect(() => {
     if (task?.pending) {
+      const heading = confirmation.current?.closest('.task-run')?.querySelector<HTMLElement>('.task-run-heading')
+      if (confirmation.current) confirmation.current.style.scrollMarginTop = `${(heading?.offsetHeight || 140) + 16}px`
       confirmation.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-      confirmation.current?.focus()
+      confirmation.current?.focus({ preventScroll: true })
     }
   }, [task?.pending?.id])
   useEffect(() => {
@@ -96,12 +131,14 @@ export default function TaskMode({ onActive }: { onActive: (active: boolean) => 
     }
   }, [task?.answer, task?.message, task?.error])
   useEffect(() => {
+    if (task?.questionId) setReply('')
+  }, [task?.questionId])
+  useEffect(() => {
     if (task?.questionId) {
-      setReply('')
       replyBox.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
       replyBox.current?.focus({ preventScroll: true })
     }
-  }, [task?.questionId])
+  }, [task?.questionId, expanded])
 
   const send = async (path: string, body: object) => {
     if (commandBusy.current) return false
@@ -122,18 +159,41 @@ export default function TaskMode({ onActive }: { onActive: (active: boolean) => 
     }
   }
 
+  const newTask = () => {
+    host.send({ type: 'setAssistantExpanded', expanded: false })
+    setShowSetup(true)
+    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('#task-goal')?.focus(), 0)
+  }
+  const retryTask = () => {
+    setGoal(task?.conversation.filter(message => message.role === 'user').map(message => message.content).join('\n') || '')
+    setSharePage(false)
+    newTask()
+  }
+  if (expanded && task && !active(task) && !showSetup) {
+    return <ResearchResults task={task} onBack={() => host.send({ type: 'setAssistantExpanded', expanded: false })} onNew={newTask} onRetry={retryTask} />
+  }
+
   return (
-    <section className="task-mode" aria-label="Browser task mode">
+    <section className={`task-mode${expanded ? ' task-expanded' : ''}`} aria-label="Browser task mode"
+      onWheel={event => { if (event.deltaY < 0 && working) setFollowActivity(false) }}>
+      <div className="task-workspace-bar">
+        <span className="local-eyebrow">Find your next step</span>
+        <button className="assistant-secondary" onClick={() => host.send({ type: 'setAssistantExpanded', expanded: !expanded })}>
+          {expanded ? 'Show browser' : task && !active(task) && !showSetup
+            ? task.answer ? 'View findings' : 'View research trail'
+            : 'Expand task'}
+        </button>
+      </div>
       {showSetup && <div className="task-intro">
         <span className="local-eyebrow">Intent → evidence → decision</span>
         <h2>Give the web a goal.</h2>
-        <p>Search the web or research this page. Review every navigation, then see which pages were read and what was actually verified.</p>
-        <span className="local-badge">6 pages max · Every navigation approved</span>
+        <p>Find concrete options with direct links. Travel pairs flights and hotels; shopping compares products. Comparable observed prices sort lowest first.</p>
+        <span className="local-badge">6 pages max · You control research permissions</span>
         <p className="privacy-note">Reader preview: no flight/hotel form filling or booking. Dates and travelers are needed for availability research. Prices on search pages are not confirmed quotes.</p>
       </div>}
       {showSetup && <form className="task-form" onSubmit={event => {
         event.preventDefault()
-        void send('/api/agent', { goal, sharePage, startMode }).then(ok => { if (ok) setShowSetup(false) })
+        void send('/api/agent', { goal, sharePage, startMode, compareOptions }).then(ok => { if (ok) setShowSetup(false) })
       }}>
         <label htmlFor="task-goal">What do you want to find out?</label>
         <textarea id="task-goal" rows={3} value={goal} disabled={active(task) || busy}
@@ -144,6 +204,12 @@ export default function TaskMode({ onActive }: { onActive: (active: boolean) => 
           onChange={event => setStartMode(event.target.value === 'currentPage' ? 'currentPage' : 'webSearch')}>
           <option value="webSearch">Search the web (recommended)</option>
           <option value="currentPage">Research the current page</option>
+        </select>
+        <label htmlFor="task-format">Result format</label>
+        <select id="task-format" value={compareOptions ? 'options' : 'brief'} disabled={active(task) || busy}
+          onChange={event => setCompareOptions(event.target.value === 'options')}>
+          <option value="options">Actionable options · prices & direct links</option>
+          <option value="brief">Research brief / explanation</option>
         </select>
         <p className="privacy-note">{startMode === 'webSearch'
           ? 'Plans a search without reading or sharing the starting tab. You approve its query and URL before opening Google; this replaces the page in your active tab.'
@@ -159,14 +225,31 @@ export default function TaskMode({ onActive }: { onActive: (active: boolean) => 
       </form>}
       {error && <div className="task-error" role="alert">{error}</div>}
       {connectionError && <div className="task-error" role="alert">Task status could not refresh: {connectionError}</div>}
-      {task && (
+      {task && !showSetup && (
         <div className="task-run">
           <div className={`task-run-heading${active(task) ? ' is-active' : ''}`}>
             <div>
-              <span className={`task-status ${task.status}`} role="status">{labels[task.status]}</span>
+              <span className={`task-status ${task.status}`} role="status">
+                {working && <span className="task-working-dots" aria-hidden="true"><i /><i /><i /></span>}
+                {connectionError && active(task) ? 'Connection interrupted' : labels[task.status]}
+              </span>
               {!active(task) && <h3>Research conversation</h3>}
               <p>{task.model} · {task.pagesRead}/{task.maxSteps} pages</p>
+              {task.status === 'running' && <div className="task-live-step">
+                <strong aria-live="polite">{connectionError ? 'Status updates are unavailable; reconnecting.' : latestStep}</strong>
+                {!connectionError && <small>{stepSeconds}s on this step · {stepSeconds >= 20 ? 'Still waiting; Stop remains available.' : 'Updates appear as each step completes.'}</small>}
+              </div>}
+              {task.pending && <span className="approval-attention" role="status">Waiting for you — choose an approval below</span>}
             </div>
+            {active(task) && task.researchPermission === 'allResearch' && <aside className="research-grant" aria-label="Automatic research permission">
+              <strong>Automatic research · This task only</strong>
+              <button className="assistant-secondary" disabled={busy}
+                onClick={() => void send('/api/agent/revoke-research', { taskId: task.id })}>Ask before each navigation</button>
+              <details><summary>Permission scope</summary>
+                <p>Searches, observed links and their redirects only. No purchases, submissions or downloads. Expires when this run ends.</p>
+                <small>Revoking affects subsequent proposals. Use Stop to interrupt the current action.</small>
+              </details>
+            </aside>}
             {active(task) && <button className="assistant-secondary" disabled={busy}
               onClick={() => void send('/api/agent/stop', { taskId: task.id })}>Stop / take over</button>}
           </div>
@@ -176,32 +259,6 @@ export default function TaskMode({ onActive }: { onActive: (active: boolean) => 
               <div className="chat-text">{message.content}</div>
             </article>)}
           </div>
-          <details className="task-activity">
-            <summary>Activity · {task.steps.length} steps</summary>
-            <ol className="task-timeline" aria-label="Task activity">
-            {task.steps.map((step, index) => <li key={index}>{step}</li>)}
-            </ol>
-          </details>
-          {task.status === 'running' && <p className="task-progress" role="status">{task.steps.at(-1)}</p>}
-          <p className="privacy-note">Starting point: {task.startMode === 'webSearch' ? 'Web search (starting tab not read)' : 'Current page'}. {task.pagesRead} page(s) read. No forms filled and no bookings made.</p>
-          {task.pending && (
-            <div className="task-approval" ref={confirmation} tabIndex={-1} role="region" aria-label="Navigation approval">
-              <span className="local-eyebrow">Your approval is required</span>
-              <h3>{task.pending.kind === 'search' ? 'Run this web search?' : 'Follow this link?'}</h3>
-              <p>{task.pending.reason}</p>
-              <code>{task.pending.url}</code>
-              <p className="privacy-note">This replaces the page in this tab and shares its content with your model. Unapproved main-frame navigation, redirects, popups and downloads are blocked. Normal site scripts, their network requests and signed-in cookies still apply; this is not an isolated browsing profile.</p>
-              <div className="task-approval-actions">
-                <button className="assistant-secondary" disabled={busy}
-                  onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: false })}>Decline & stop</button>
-                <button className="assistant-primary" disabled={busy}
-                  onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true })}>Approve navigation</button>
-              </div>
-            </div>
-          )}
-          {task.error && <article className="task-error" ref={resultCard} tabIndex={-1} aria-label="Task failure" role="alert">
-            <strong>No verified result</strong><p>{task.error}</p><p>No booking was made. Check the pages observed below, adjust your goal, or try another model.</p>
-          </article>}
           {task.status === 'needsInput' && task.questionId && <form className="task-reply" aria-label="Reply to assistant" onSubmit={event => {
             event.preventDefault()
             void send('/api/agent/reply', { taskId: task.id, questionId: task.questionId, message: reply })
@@ -211,39 +268,90 @@ export default function TaskMode({ onActive }: { onActive: (active: boolean) => 
               disabled={busy} placeholder="Add the details here. I’ll continue this task."
               onChange={event => setReply(event.target.value)} />
             <button className="assistant-primary" disabled={busy || !reply.trim()} type="submit">Send reply & continue</button>
-            <p className="privacy-note">Your reply goes to the same model. Evidence and previous replies are kept; the six-page and ten-minute limits still apply.</p>
+            <small>Same conversation. Your earlier details and evidence are kept.</small>
           </form>}
+          {task.pending && (
+            <div className="task-approval" ref={confirmation} tabIndex={-1} role="region" aria-label="Navigation approval">
+              <span className="local-eyebrow">Your approval is required</span>
+              <h3>{task.pending.kind === 'search' ? 'Run this web search?' : task.pending.kind === 'redirect' ? 'Follow this redirect to another website?' : 'Follow this link?'}</h3>
+              <p>{task.pending.reason}</p>
+              <code>{task.pending.url}</code>
+              <div className="task-approval-actions approval-choices">
+                <button className="assistant-secondary" disabled={busy}
+                  onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: false })}>Decline & stop</button>
+                <button className="assistant-primary approval-allow" disabled={busy}
+                  onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true })}>Approve navigation</button>
+                <button className="assistant-primary approval-allow-all" disabled={busy}
+                  onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true, allowAllResearch: true })}>Allow all research for this task</button>
+              </div>
+              <p className="approval-scope">Allow all covers up to six page reads across websites in this run, including sharing their content with your model. It never authorizes bookings, buying, form submissions, uploads or downloads. You can revoke it or stop at any time.</p>
+              <details><summary>Navigation & privacy details</summary>
+                <p className="privacy-note">This replaces the page in this tab and shares its content with your model. Same-site redirects are followed; redirects to another website pause for approval (or your research permission). Checkout/account pages, form submissions, popups and downloads are blocked. Normal site scripts, their network requests and signed-in cookies still apply; this is not an isolated browsing profile.</p>
+              </details>
+            </div>
+          )}
+          {task.error && <article className="task-error" ref={resultCard} tabIndex={-1} aria-label="Task failure" role="alert">
+            <strong>Task failed without a final answer</strong><p>{task.error}</p>
+            <TaskDiagnostic task={task} />
+            <p>No booking was made. Start a new task to retry; your earlier conversation is shown above.</p>
+            <DiagnosticActions task={task} />
+          </article>}
           {task.message && task.status !== 'needsInput' && <article className="task-result" ref={resultCard} tabIndex={-1} aria-label="Task guidance">
             <h3>I could not verify this</h3>
             <div className="chat-text">{task.message}</div>
             <p className="privacy-note">This is not a completed research result. No booking was made.</p>
           </article>}
-          {task.protocolIssue && <details className="task-protocol">
-            <summary>Model protocol diagnostic</summary>
-            <p>{task.protocolIssue}</p>
-            <p>Only visited sources are accepted. A correction can fix formatting, not establish live availability.</p>
-          </details>}
           {task.answer && <article className="task-result" ref={resultCard} tabIndex={-1} aria-label="Research brief">
             <span className="local-eyebrow">Your research brief</span>
-            <h3>Here’s what I found</h3>
-            <div className="chat-text">{task.answer}</div>
+            <h3>{task.report?.title || 'Here’s what I found'}</h3>
+            <div className="chat-text">{task.report?.summary || task.answer}</div>
           </article>}
-          {task.sources.length > 0 && <div className="task-sources">
+          {task.sources.length > 0 && !active(task) && <div className="task-sources">
             <h3>{task.answer ? 'Answer sources' : 'Pages observed'}</h3>
             {task.sources.map(source => <button key={source.id} className="task-source"
               disabled={active(task) || busy}
-              title={active(task) ? 'Stop the task before opening a source' : source.url}
-              onClick={() => host.send({ type: 'navigate', input: source.url })}>
+              title={active(task) ? 'Stop the task before opening a source' : `Open in a new tab: ${source.url}`}
+              onClick={() => host.send({ type: 'newTab', url: source.url })}>
               <strong>[{source.id}] {source.title || source.url}</strong><span>{source.url}</span>
             </button>)}
           </div>}
           {!active(task) && <>
-            <button className="assistant-secondary" onClick={() => {
-              setShowSetup(true)
-              window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('#task-goal')?.focus(), 0)
-            }}>Start a new task</button>
+            <div className="task-approval-actions">
+              <button className="assistant-primary" onClick={() => host.send({ type: 'setAssistantExpanded', expanded: true })}>
+                {task.answer ? 'View findings' : 'View research trail'}
+              </button>
+              <button className="assistant-secondary" onClick={newTask}>Start a new task</button>
+              {task.error && <button className="assistant-secondary" onClick={retryTask}>Retry with my details</button>}
+            </div>
             <p className="privacy-note">Tasks and conversation stay in memory for this browser session only. A new task replaces this run. This is a reader agent, not a form-filling or purchasing agent.</p>
           </>}
+          <div className="task-research-meta">
+            <details className="task-activity" ref={activityPanel}>
+              <summary>{task.status === 'running' ? 'Live activity' : 'Activity'} · {task.steps.length} steps</summary>
+              {task.status === 'running' && <div className="activity-follow">
+                <span>{followActivity ? 'Following latest updates' : 'Reading earlier activity'}</span>
+                {!followActivity && <button className="assistant-secondary" onClick={() => setFollowActivity(true)}>Jump to latest</button>}
+              </div>}
+              <ol className="task-timeline" ref={activityList} aria-label="Task activity"
+                onScroll={event => {
+                  const list = event.currentTarget
+                  setFollowActivity(list.scrollHeight - list.scrollTop - list.clientHeight < 16)
+                }}>
+                {task.steps.map((step, index) => <li key={index} className={index === task.steps.length - 1 && working ? 'current-step' : ''}>
+                  <span className="activity-index">{index + 1}</span><span>{step}</span>
+                </li>)}
+              </ol>
+              {task.permissionEvents.length > 0 && <><h4>Permission trail</h4><ol className="task-timeline">
+                {task.permissionEvents.map((event, index) => <li key={index}>
+                  <time dateTime={new Date(Number(event.at)).toISOString()}>{new Date(Number(event.at)).toLocaleTimeString()}</time>
+                  {' · '}{event.decision}{event.url && <small className="permission-url">{event.url}</small>}
+                </li>)}
+              </ol></>}
+              <p className="privacy-note">Starting point: {task.startMode === 'webSearch' ? 'Web search (starting tab not read)' : 'Current page'}. No forms filled or bookings made. Six-page and ten-minute limits include replies.</p>
+            </details>
+            <SearchTrail task={task} />
+            {!task.error && <TaskDiagnostic task={task} />}
+          </div>
         </div>
       )}
     </section>

@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 /// Height (DIP) of the chrome strip: tab row + toolbar row.
 const CHROME_HEIGHT: i32 = 84;
-const APP_NAME: &str = "AI Browser";
+const APP_NAME: &str = "Rovuka";
 const SEARCH_TEMPLATE: &str = "https://www.google.com/search?q={q}";
 const DARK_BG: u32 = 0xFF1E1F22;
 const MAX_PAGE_TEXT_CHARS: usize = 80_000;
@@ -36,7 +36,15 @@ struct AgentGuard {
     lease_id: String,
     allowed_url: String,
     blocked: Option<String>,
+    /// Page-initiated hops since the last agent navigation (bounded).
+    redirects: u8,
+    /// Cross-site destination the page tried to open; paused for task authorization.
+    redirect_proposal: Option<String>,
+    /// Same-site redirects followed during this lease (cumulative, for the activity trail).
+    followed: Vec<String>,
 }
+
+const MAX_PAGE_REDIRECTS: u8 = 8;
 
 #[derive(Default)]
 struct HostState {
@@ -48,6 +56,7 @@ struct HostState {
     assistant_view: Option<BrowserView>,
     assistant_browser: Option<Browser>,
     assistant_open: bool,
+    assistant_expanded: bool,
     tabs: Vec<Tab>,
     active: Option<TabId>,
     next_id: TabId,
@@ -171,7 +180,13 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
     }
     let (tab_id, expected) = match &request {
         HostRequest::Inspect { tab_id, .. } => (*tab_id, None),
+        HostRequest::Lease { tab_id, .. } => (Some(*tab_id), None),
         HostRequest::Call {
+            tab_id,
+            expected_url,
+            ..
+        }
+        | HostRequest::Ready {
             tab_id,
             expected_url,
             ..
@@ -212,10 +227,32 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
             }) {
                 anyhow::bail!("{blocked}");
             }
-            if let Some(expected) = expected
-                && (info.url != expected || info.loading)
-            {
-                anyhow::bail!("The task page changed or is still loading. Start again when ready.");
+            if let Some(expected) = expected {
+                if info.url != expected {
+                    // Same-site redirects and same-document URL updates move the guard's approved
+                    // URL; report them as a typed move so the agent revalidates instead of failing.
+                    let approved_move = with_state(|s| {
+                        s.agent_guard
+                            .as_ref()
+                            .is_some_and(|g| g.tab_id == info.id && g.allowed_url == info.url)
+                    });
+                    if approved_move {
+                        return Err(crate::cdp::PageMoved(info.url.clone()).into());
+                    }
+                    tracing::warn!(
+                        expected = %expected,
+                        actual = %info.url,
+                        "Task tab URL changed outside the approved navigation"
+                    );
+                    anyhow::bail!(
+                        "The task page URL changed outside the approved navigation (expected {}, now {}). No further action was accepted.",
+                        crate::diagnostics::short_url(expected),
+                        crate::diagnostics::short_url(&info.url)
+                    );
+                }
+                if info.loading {
+                    return Err(crate::cdp::PageLoading.into());
+                }
             }
             if let Some(ui) = UI_URL.get()
                 && url::Url::parse(&info.url).ok().is_some_and(|page| {
@@ -245,6 +282,9 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
                         lease_id,
                         allowed_url: expected_url,
                         blocked: None,
+                        redirects: 0,
+                        redirect_proposal: None,
+                        followed: Vec::new(),
                     })
                 });
                 serde_json::Value::Null
@@ -253,6 +293,31 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
         HostRequest::Inspect { reply, .. } => {
             let _ = reply
                 .send(result.and_then(|(info, _)| serde_json::to_value(info).map_err(Into::into)));
+        }
+        HostRequest::Ready { reply, .. } => {
+            let _ = reply.send(result.map(|_| serde_json::Value::Null));
+        }
+        HostRequest::Lease {
+            tab_id,
+            lease_id,
+            reply,
+        } => {
+            let _ = reply.send(result.and_then(|_| {
+                with_state(|s| {
+                    let guard = s
+                        .agent_guard
+                        .as_ref()
+                        .filter(|g| g.tab_id == tab_id && g.lease_id == lease_id)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("Task navigation guard is no longer active")
+                        })?;
+                    Ok(serde_json::json!({
+                        "allowedUrl": guard.allowed_url,
+                        "redirect": guard.redirect_proposal,
+                        "followed": guard.followed,
+                    }))
+                })
+            }));
         }
         HostRequest::Call {
             id,
@@ -295,6 +360,8 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
                             anyhow::anyhow!("Task navigation guard is no longer active")
                         })?;
                     guard.allowed_url = url.clone();
+                    guard.redirects = 0;
+                    guard.redirect_proposal = None;
                     Ok::<_, anyhow::Error>(())
                 })?;
                 frame.load_url(Some(&CefString::from(url.as_str())));
@@ -317,6 +384,7 @@ pub fn handle_command(cmd: Command) {
     }
     if cmd.interrupts_agent() {
         with_state(|s| s.agent_guard = None);
+        set_assistant_expanded(false);
     }
     match cmd {
         Command::NewTab { url } => {
@@ -361,7 +429,19 @@ pub fn handle_command(cmd: Command) {
             }
         }
         Command::FocusContent => {
-            if let Some(view) = with_state(|s| s.active).and_then(tab_view) {
+            let view = with_state(|s| {
+                if s.assistant_expanded {
+                    s.assistant_view.clone()
+                } else {
+                    s.active.and_then(|id| {
+                        s.tabs
+                            .iter()
+                            .find(|tab| tab.id == id)
+                            .map(|tab| tab.view.clone())
+                    })
+                }
+            });
+            if let Some(view) = view {
                 view.request_focus();
             }
         }
@@ -381,8 +461,43 @@ pub fn handle_command(cmd: Command) {
             }
         }
         Command::ToggleAssistant => toggle_assistant(),
+        Command::SetAssistantExpanded { expanded } => set_assistant_expanded(expanded),
         Command::GetPageText { request_id } => get_page_text(request_id),
     }
+}
+
+fn set_assistant_expanded(expanded: bool) {
+    let (assistant, content, layout, active, open) = with_state(|s| {
+        s.assistant_expanded = expanded && s.assistant_open;
+        (
+            s.assistant_view.clone(),
+            s.content.clone(),
+            s.content_layout.clone(),
+            s.active.and_then(|id| {
+                s.tabs
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .map(|tab| tab.view.clone())
+            }),
+            s.assistant_expanded,
+        )
+    });
+    if let (Some(assistant), Some(content), Some(layout)) = (assistant, content, layout) {
+        if let Some(active) = active {
+            let mut child = View::from(&active);
+            child.set_visible((!open) as i32);
+            layout.set_flex_for_view(Some(&mut child), if open { 0 } else { 1 });
+            if let Some(host) = active.browser().and_then(|browser| browser.host()) {
+                host.was_hidden(open as i32);
+            }
+        }
+        layout.set_flex_for_view(Some(&mut View::from(&assistant)), if open { 1 } else { 0 });
+        content.layout();
+        if open {
+            assistant.request_focus();
+        }
+    }
+    crate::bus::emit(Event::AssistantLayout { expanded: open });
 }
 
 fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
@@ -1066,16 +1181,68 @@ wrap_request_handler! {
 
     impl RequestHandler {
         fn on_before_browse(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>,
-            request: Option<&mut Request>, _user_gesture: i32, _is_redirect: i32) -> i32 {
+            request: Option<&mut Request>, user_gesture: i32, is_redirect: i32) -> i32 {
             if frame.is_none_or(|frame| frame.is_main() == 0) { return 0; }
             let tab = browser_id(browser).and_then(tab_id_for_browser);
             let url = request.as_ref().map(|request| CefString::from(&request.url()).to_string()).unwrap_or_default();
             let method = request.as_ref().map(|request| CefString::from(&request.method()).to_string()).unwrap_or_default();
             with_state(|s| {
+                let committed = s.tabs.iter().find(|t| Some(t.id) == tab).map(|t| t.info.url.clone());
                 let Some(guard) = s.agent_guard.as_mut().filter(|guard| Some(guard.tab_id) == tab) else { return 0 };
                 if url == guard.allowed_url && method == "GET" { return 0; }
-                guard.blocked = Some("An unapproved navigation or redirect was blocked. Stop the task to take over.".into());
-                tracing::warn!("Blocked unapproved navigation in the task tab");
+                let destination = url::Url::parse(&url).map(|url| {
+                    format!("{}{}", url.origin().ascii_serialization(), url.path())
+                }).unwrap_or_else(|_| "an invalid destination".into());
+                let kind = if method != "GET" { "non-GET request" } else if is_redirect != 0 { "redirect" } else { "page navigation" };
+                // Server redirects and script/meta navigations without user activation are the
+                // site's decision, like a normal browser following a link; apply the redirect policy.
+                if method == "GET" && (is_redirect != 0 || user_gesture == 0) {
+                    use crate::policy::Redirect;
+                    // While an approved navigation is still pending, a script navigation comes from
+                    // the previous page: cancel it so it cannot replace the approved destination.
+                    if is_redirect == 0 && committed.as_deref() != Some(guard.allowed_url.as_str()) {
+                        tracing::info!(target_url = %url, approved = %guard.allowed_url, "Guard: cancelled a script navigation while an approved navigation was pending");
+                        return 1;
+                    }
+                    let trusted_ui = UI_URL.get().and_then(|ui| url::Url::parse(ui).ok())
+                        .zip(url::Url::parse(&url).ok())
+                        .is_some_and(|(ui, target)| ui.origin() == target.origin());
+                    let decision = if trusted_ui {
+                        Redirect::Forbidden("its destination is the trusted browser UI")
+                    } else if guard.redirects >= MAX_PAGE_REDIRECTS {
+                        Redirect::Forbidden("the site redirected too many times")
+                    } else {
+                        crate::policy::classify_redirect(&guard.allowed_url, &url)
+                    };
+                    match decision {
+                        Redirect::SameSite => {
+                            tracing::info!(from = %guard.allowed_url, to = %url, kind, "Guard: followed same-site redirect");
+                            guard.redirects += 1;
+                            guard.allowed_url = url.clone();
+                            guard.followed.push(url);
+                            return 0;
+                        }
+                        Redirect::CrossSite => {
+                            if guard.redirect_proposal.is_none() {
+                                tracing::info!(from = %guard.allowed_url, to = %url, kind, "Guard: paused cross-site redirect for task authorization");
+                                guard.redirects += 1;
+                                guard.redirect_proposal = Some(url);
+                            }
+                            return 1;
+                        }
+                        Redirect::Forbidden(reason) => {
+                            tracing::warn!(from = %guard.allowed_url, to = %url, kind, reason, "Guard: blocked forbidden redirect");
+                            guard.blocked = Some(format!(
+                                "A {kind} was blocked because {reason} ({destination}). Query/fragment details are omitted. Open the site manually or retry the task; no further agent action was accepted."
+                            ));
+                            return 1;
+                        }
+                    }
+                }
+                tracing::warn!(approved = %guard.allowed_url, to = %url, kind, method = %method, user_gesture, "Guard: blocked unapproved navigation");
+                guard.blocked = Some(format!(
+                    "An unapproved {kind} was blocked ({destination}). Query/fragment details are omitted. Open the site manually or retry the task; no further agent action was accepted."
+                ));
                 1
             })
         }
@@ -1093,6 +1260,21 @@ wrap_display_handler! {
             let Some(tab) = browser_id(browser).and_then(tab_id_for_browser) else { return };
             let url = url.map(|u| u.to_string()).unwrap_or_default();
             let url = if url == "about:blank" { String::new() } else { url };
+            // A committed page changing its own URL (pushState/replaceState/fragment) stays on the
+            // same origin and loads no new document; keep the task lease on that page.
+            with_state(|s| {
+                let previous = s.tabs.iter().find(|t| t.id == tab).map(|t| t.info.url.clone());
+                let Some(guard) = s.agent_guard.as_mut().filter(|g| g.tab_id == tab) else { return };
+                if url == guard.allowed_url || previous.as_deref() == Some(url.as_str()) { return; }
+                let same_origin = url::Url::parse(&guard.allowed_url).ok().zip(url::Url::parse(&url).ok())
+                    .is_some_and(|(from, to)| from.origin() == to.origin());
+                if previous.as_deref() == Some(guard.allowed_url.as_str()) && same_origin {
+                    tracing::info!(from = %guard.allowed_url, to = %url, "Guard: adopted same-document URL update");
+                    guard.allowed_url = url.clone();
+                } else {
+                    tracing::warn!(approved = %guard.allowed_url, previous = ?previous, now = %url, "Guard: task tab address changed without approval");
+                }
+            });
             update_tab(tab, |t| t.url = url);
         }
 

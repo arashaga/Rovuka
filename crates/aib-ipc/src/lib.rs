@@ -54,6 +54,9 @@ pub enum Command {
         tab_id: Option<TabId>,
     },
     ToggleAssistant,
+    SetAssistantExpanded {
+        expanded: bool,
+    },
     GetPageText {
         request_id: String,
     },
@@ -129,6 +132,9 @@ pub enum Event {
         download: DownloadInfo,
     },
     FocusOmnibox,
+    AssistantLayout {
+        expanded: bool,
+    },
     PageText {
         request_id: String,
         tab_id: Option<TabId>,
@@ -275,6 +281,21 @@ mod tests {
             .interrupts_agent()
         );
         assert!(!Command::FocusContent.interrupts_agent());
+        assert!(!Command::SetAssistantExpanded { expanded: true }.interrupts_agent());
+    }
+
+    #[test]
+    fn findings_layout_wire_format() {
+        let command: Command =
+            serde_json::from_str(r#"{"type":"setAssistantExpanded","expanded":true}"#).unwrap();
+        assert!(matches!(
+            command,
+            Command::SetAssistantExpanded { expanded: true }
+        ));
+        assert_eq!(
+            serde_json::to_string(&Event::AssistantLayout { expanded: false }).unwrap(),
+            r#"{"type":"assistantLayout","expanded":false}"#
+        );
     }
 
     #[test]

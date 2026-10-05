@@ -12,6 +12,7 @@ public static class NativeWindowTest {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hwnd, System.Text.StringBuilder text, int count);
 }
 '@
 $script:handle = [IntPtr]::Zero
@@ -27,6 +28,9 @@ $callback = [NativeWindowTest+EnumProc]{
 }
 [void][NativeWindowTest]::EnumWindows($callback, [IntPtr]::Zero)
 if ($script:handle -eq [IntPtr]::Zero) { throw 'Test browser window not found' }
+$title = New-Object System.Text.StringBuilder 512
+[void][NativeWindowTest]::GetWindowText($script:handle, $title, $title.Capacity)
+if (-not $title.ToString().EndsWith('Rovuka')) { throw "Expected native window brand Rovuka" }
 $style = [NativeWindowTest]::GetWindowLongPtr($script:handle, -16).ToInt64()
 foreach ($flag in @(0x20000, 0x10000, 0x40000)) {
     if (($style -band $flag) -eq 0) { throw "Native window capability missing: $flag" }
@@ -47,4 +51,4 @@ try {
 }
 Start-Sleep -Milliseconds 400
 if ([NativeWindowTest]::IsZoomed($script:handle) -or [NativeWindowTest]::IsIconic($script:handle)) { throw 'Restore failed' }
-Write-Output 'PASS: native minimize/maximize/restore and resizable titlebar styles'
+Write-Output 'PASS: Rovuka native title, minimize/maximize/restore and resizable titlebar styles'

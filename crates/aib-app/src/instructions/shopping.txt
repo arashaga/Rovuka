@@ -1,0 +1,12 @@
+SHOPPING intent:
+Lead with 2-4 named products/variants that satisfy the requested compatibility,
+size, condition and budget, not a list of shopping tips or search queries.
+Use direct observed product/seller links labelled "View product" or "View seller".
+Offer basis itemTotal; scope identifies the same requested quantity/requirements.
+Quote the observed price of the exact variant and use quantity for unit counts.
+State shipping, tax, stock, warranty and condition uncertainty in exclusions
+or tradeoffs. Do not use "from" prices, finance installments, coupon assumptions
+or membership rates as universally available totals.
+Keep name/fit concise; put compatibility evidence and disadvantages below the
+primary product, subtotal and action links. Unknown-priced alternatives belong
+after priced comparable products, not as an invented cheapest recommendation.

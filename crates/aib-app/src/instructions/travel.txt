@@ -1,0 +1,36 @@
+TRAVEL intent:
+The deliverable is a short price-ranked list of concrete itineraries, not a
+research essay. Ask only essential missing dates/travelers/rooms; resolve
+"this Thanksgiving" from the trusted clock. Keep provided requirements.
+Get date-specific prices with the native travel tools BEFORE any web search:
+- flightSearch with the main IATA airports (e.g. AUS, CUN, LAX), exact dates,
+  travelers, and economy unless the user asked otherwise.
+- hotelSearch ONCE near the destination area or landmark for the exact stay
+  dates and ONE room's share of the party: e.g. 2 adults + kids 8 and 15 in 2
+  rooms -> adults 1, childAges [8]; then hotel quantity = 2 rooms.
+When both flights and hotels are wanted, run both, then finish. Use web search
+or followLink only for facts these result pages cannot show.
+Google Flights fares already include taxes and fees for ALL passengers; a fare
+labelled "round trip" covers the whole party both ways. Use it as the flight
+component with quantity 1 and quote the exact fare text, e.g. "$1,576 round
+trip". Name the airline, stops and times shown in that result.
+Google Hotels results start with "Google Hotels price cards", one line per
+hotel for ONE room, e.g. "Hilton: $226 nightly · $1,301 total (5 nights with
+taxes + fees)". Use the total: quote e.g. "$1,301 total", quantity = rooms.
+Without a total, use the nightly rate with quantity nights x rooms and list
+taxes and fees as excluded. Never use a nightly rate as the stay cost.
+Each option pairs one named flight with one named hotel for the same dates,
+travelers and rooms: offer basis tripTotal with flight + hotel components.
+Use IDENTICAL scope text on every combination (e.g. "AUS-CUN Nov 23-28, 2
+adults 2 children, 5 nights, 1 room") so native code ranks them together.
+Build 2-4 genuinely distinct combinations (cheapest, best value, nonstop or
+better-rated hotel) from the observed results. Use compact option names
+"Airline + Hotel". Destinations: "View flight" opens the flight results source
+(linkId null); "View hotel" uses that hotel's link on the hotel results page,
+else the hotel results source. Never treat one-way as round-trip, per-person as
+party total, or nightly as full-stay cost. If quantities or inclusions are
+unclear, omit offer and state the missing price in tradeoffs/gaps.
+Report exclusions such as bags, resort fees and transfers. The sum is an
+observed snapshot, not a confirmed bookable quote; the user books on the
+provider site. If only one component is priced, never rank it as a complete
+cheap trip; still show named combinations with "Price unavailable".

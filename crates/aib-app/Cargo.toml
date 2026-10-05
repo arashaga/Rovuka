@@ -1,13 +1,13 @@
 [package]
 name = "aib-app"
-description = "AI Browser desktop host: CEF window, tabs, and the local UI/IPC server."
+description = "Rovuka desktop host: CEF window, tabs, and the local UI/IPC server."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "aibrowser"
+name = "rovuka"
 path = "src/main.rs"
 
 [dependencies]
@@ -28,3 +28,4 @@ anyhow.workspace = true
 futures-util.workspace = true
 url.workspace = true
 async-stream.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

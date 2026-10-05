@@ -18,6 +18,7 @@ export default function App() {
   const [downloads, setDownloads] = useState<Map<number, DownloadInfo>>(new Map())
   const [omnibox, setOmnibox] = useState('')
   const [editing, setEditing] = useState(false)
+  const [findingsOpen, setFindingsOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const activeTab = tabs.find((t) => t.id === active)
@@ -26,6 +27,9 @@ export default function App() {
     () =>
       host.subscribe((e) => {
         switch (e.type) {
+          case 'assistantLayout':
+            setFindingsOpen(e.expanded)
+            break
           case 'tabs':
             setTabs(e.tabs)
             setActive(e.active)
@@ -127,6 +131,7 @@ export default function App() {
           </button>
         )}
 
+        {findingsOpen && <span className="workspace-indicator" role="status">Research workspace</span>}
         <div className="omnibox">
           <input
             ref={inputRef}

@@ -14,6 +14,7 @@ export type Command =
   | { type: 'focusContent' }
   | { type: 'showDevTools'; tabId?: TabId }
   | { type: 'toggleAssistant' }
+  | { type: 'setAssistantExpanded'; expanded: boolean }
   | { type: 'getPageText'; requestId: string }
 
 export interface TabInfo {
@@ -46,6 +47,7 @@ export type HostEvent =
   | { type: 'tabs'; tabs: TabInfo[]; active: TabId | null }
   | { type: 'download'; download: DownloadInfo }
   | { type: 'focusOmnibox' }
+  | { type: 'assistantLayout'; expanded: boolean }
   | {
       type: 'pageText'
       requestId: string

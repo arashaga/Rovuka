@@ -9,6 +9,8 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
   pageTitle?: string
+  failure?: string
+  researchGoal?: string
 }
 
 const defaults: Record<Provider, Pick<ModelSettings, 'baseUrl' | 'model' | 'apiVersion'>> = {
@@ -39,6 +41,8 @@ export default function Assistant() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [panel, setPanel] = useState<'chat' | 'local' | 'task'>('chat')
   const [taskActive, setTaskActive] = useState(false)
+  const [taskGoal, setTaskGoal] = useState('')
+  const [expanded, setExpanded] = useState(false)
   const [provider, setProvider] = useState<Provider>('openAiCompatible')
   const [baseUrl, setBaseUrl] = useState(defaults.openAiCompatible.baseUrl)
   const [model, setModel] = useState(defaults.openAiCompatible.model)
@@ -70,6 +74,10 @@ export default function Assistant() {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
       })
     const unsubscribe = host.subscribe((event: HostEvent) => {
+      if (event.type === 'assistantLayout') {
+        setExpanded(event.expanded)
+        return
+      }
       if (event.type !== 'pageText') return
       const complete = waitingForPage.current.get(event.requestId)
       if (complete) {
@@ -105,6 +113,14 @@ export default function Assistant() {
 
   const updateMessage = (id: string, update: (message: ChatMessage) => ChatMessage) =>
     setMessages((previous) => previous.map((message) => (message.id === id ? update(message) : message)))
+
+  const researchWeb = (goal: string) => {
+    if (busy || taskActive) return
+    setTaskGoal(goal.trim())
+    setSettingsOpen(false)
+    host.send({ type: 'setAssistantExpanded', expanded: false })
+    setPanel('task')
+  }
 
   const submit = async () => {
     const prompt = question.trim()
@@ -145,10 +161,8 @@ export default function Assistant() {
         if (value.delta) updateMessage(answerId, (message) => ({ ...message, text: message.text + value.delta }))
       })
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-      updateMessage(answerId, (message) =>
-        message.text ? message : { ...message, text: 'I could not complete that request.' },
-      )
+      const failure = reason instanceof Error ? reason.message : String(reason)
+      updateMessage(answerId, (message) => ({ ...message, failure, researchGoal: prompt }))
     } finally {
       setBusy(false)
       inputRef.current?.focus()
@@ -189,11 +203,11 @@ export default function Assistant() {
     <main className="assistant">
       <header className="assistant-header">
         <div>
-          <strong>✦ AI workspace</strong>
+          <strong>✦ Rovuka</strong>
           <span>Your web. Your model. Your choice.</span>
         </div>
         <div className="assistant-header-actions">
-          <button className="assistant-icon-button" title="Model settings" aria-label="Model settings" disabled={busy || taskActive} onClick={() => { setPanel('chat'); setSettingsOpen((open) => !open) }}>
+          <button className="assistant-icon-button" title="Model settings" aria-label="Model settings" disabled={busy || taskActive} onClick={() => { host.send({ type: 'setAssistantExpanded', expanded: false }); setPanel('chat'); setSettingsOpen((open) => !open) }}>
             ⚙
           </button>
           <button
@@ -206,14 +220,14 @@ export default function Assistant() {
         </div>
       </header>
 
-      <nav className="assistant-tabs" aria-label="Assistant workspace">
+      {!expanded && <nav className="assistant-tabs" aria-label="Assistant workspace">
         <button aria-pressed={panel === 'chat'} disabled={busy || taskActive} onClick={() => setPanel('chat')}>Ask this page</button>
-        <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
+        <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setTaskGoal(''); setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
         <button aria-pressed={panel === 'local'} disabled={busy || taskActive} onClick={() => setPanel('local')}>Local models</button>
-      </nav>
+      </nav>}
 
       {panel === 'task' ? (
-        <TaskMode onActive={setTaskActive} />
+        <TaskMode onActive={setTaskActive} expanded={expanded} initialGoal={taskGoal} />
       ) : panel === 'local' ? (
         <LocalModels settings={settings} onActivate={(saved) => {
           setSettings(saved)
@@ -296,7 +310,8 @@ export default function Assistant() {
       ) : (
         <>
           <div className="assistant-context-note">
-            Page text is shared with your selected model only when “Use current page” is checked.
+            Ask this page answers questions; it does not search websites. For flights, shopping or sourced comparisons, choose Research the web.
+            {' '}Page text is shared only when “Use current page” is checked.
           </div>
           <div className="assistant-messages" ref={scrollRef}>
             {messages.length === 0 && (
@@ -311,9 +326,17 @@ export default function Assistant() {
             )}
             {messages.map((message) => (
               <article key={message.id} className={`chat-message ${message.role}`}>
-                <div className="chat-role">{message.role === 'user' ? 'You' : 'AI Browser'}</div>
+                <div className="chat-role">{message.role === 'user' ? 'You' : 'Rovuka'}</div>
                 {message.pageTitle && <div className="chat-source">From page: {message.pageTitle}</div>}
-                <div className="chat-text">{message.text || (busy && message.role === 'assistant' ? 'Thinking…' : '')}</div>
+                {(!message.failure || message.text) && <div className="chat-text">{message.text || (busy && message.role === 'assistant' ? 'Thinking…' : '')}</div>}
+                {message.failure && <div className="chat-recovery">
+                  <div role="alert">{message.failure}</div>
+                  <p>For web searches and comparisons, continue in Task mode. To ask without page context, turn off “Use current page” and retry.</p>
+                  <button className="assistant-primary" disabled={busy || taskActive}
+                    onClick={() => researchWeb(message.researchGoal || '')}>Research this request</button>
+                  <button className="assistant-secondary" disabled={busy}
+                    onClick={() => { setQuestion(message.researchGoal || ''); inputRef.current?.focus() }}>Edit and retry</button>
+                </div>}
               </article>
             ))}
           </div>
@@ -348,6 +371,8 @@ export default function Assistant() {
                 {busy ? 'Working…' : 'Ask'}
               </button>
             </div>
+            <button className="assistant-secondary" type="button" disabled={!question.trim() || busy || taskActive}
+              onClick={() => researchWeb(question)}>Research the web</button>
           </form>
         </>
       )}

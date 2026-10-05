@@ -1,6 +1,6 @@
 [package]
 name = "aib-models"
-description = "Local-first provider gateway for AI Browser."
+description = "Local-first provider gateway for Rovuka."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,7 +15,10 @@ keyring.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
 url.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+iana-time-zone = "0.1"
 
 [dev-dependencies]
 tokio.workspace = true

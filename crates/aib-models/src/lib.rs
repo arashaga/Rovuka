@@ -5,7 +5,13 @@ use keyring::Entry;
 use reqwest::{Client, Response, header};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{path::PathBuf, pin::Pin, time::Duration};
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    pin::Pin,
+    sync::{Mutex, OnceLock},
+    time::Duration,
+};
 use url::Url;
 
 const KEYRING_SERVICE: &str = "AI Browser model provider";
@@ -67,6 +73,40 @@ impl From<ModelSettings> for SettingsView {
 }
 
 pub type ChatStream = Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send>>;
+
+pub fn temporal_context() -> anyhow::Result<Value> {
+    let now = chrono::Local::now();
+    let zone = iana_time_zone::get_timezone().context("Reading the system timezone")?;
+    Ok(temporal_context_at(now.fixed_offset(), &zone))
+}
+
+fn temporal_context_at(now: chrono::DateTime<chrono::FixedOffset>, zone: &str) -> Value {
+    use chrono::Datelike;
+    let thanksgiving = |year| {
+        let first = chrono::NaiveDate::from_ymd_opt(year, 11, 1).expect("valid calendar date");
+        let day = 1 + (10 - first.weekday().num_days_from_monday()) % 7 + 21;
+        chrono::NaiveDate::from_ymd_opt(year, 11, day).expect("fourth Thursday")
+    };
+    let year = now.year();
+    let holiday = thanksgiving(year);
+    let upcoming = if holiday < now.date_naive() {
+        thanksgiving(year + 1)
+    } else {
+        holiday
+    };
+    json!({
+        "utcNow": now.with_timezone(&chrono::Utc).to_rfc3339(),
+        "localNow": now.to_rfc3339(),
+        "localDate": now.date_naive().to_string(),
+        "timeZone": zone,
+        "utcOffsetSeconds": now.offset().local_minus_utc(),
+        "currentYear": year,
+        "calendarReferences": {
+            "usThanksgivingThisYear": holiday.to_string(),
+            "nextUsThanksgiving": upcoming.to_string()
+        }
+    })
+}
 
 pub fn validate_settings(settings: &ModelSettings) -> anyhow::Result<()> {
     if settings.model.trim().is_empty() || settings.model.len() > 200 {
@@ -241,10 +281,136 @@ pub async fn instruction_stream(
     system: &str,
     prompt: &str,
 ) -> anyhow::Result<ChatStream> {
+    let response = ensure_success(send(settings, api_key, system, prompt, None).await?).await?;
+    stream_response(settings, response, false)
+}
+
+/// A JSON schema the model's reply must follow (provider "structured output").
+pub struct OutputSchema<'a> {
+    pub name: &'a str,
+    pub schema: &'a Value,
+}
+
+pub struct ModelStream {
+    pub stream: ChatStream,
+    /// The provider constrained decoding to the schema (one schema-valid JSON value).
+    pub structured: bool,
+    /// Why the schema was not used, when the provider rejected it.
+    pub fallback: Option<String>,
+}
+
+static PLAIN_ONLY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn schema_support_key(settings: &ModelSettings) -> String {
+    format!(
+        "{:?}|{}|{}",
+        settings.provider,
+        settings.base_url.trim(),
+        settings.model.trim()
+    )
+}
+
+/// Like [`instruction_stream`], but asks the provider to constrain the reply to `schema`
+/// (OpenAI/Azure/Foundry JSON schema, Anthropic forced tool, Gemini JSON schema).
+/// A provider that rejects the schema request (HTTP 400/404/422) is retried once without it
+/// and remembered for this process, so unsupported endpoints keep working.
+pub async fn structured_stream(
+    settings: &ModelSettings,
+    api_key: Option<&str>,
+    system: &str,
+    prompt: &str,
+    schema: &OutputSchema<'_>,
+) -> anyhow::Result<ModelStream> {
+    let key = schema_support_key(settings);
+    let plain_only = PLAIN_ONLY
+        .get_or_init(Default::default)
+        .lock()
+        .map(|set| set.contains(&key))
+        .unwrap_or(false);
+    let mut fallback = None;
+    if !plain_only {
+        let response = send(settings, api_key, system, prompt, Some(schema)).await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(ModelStream {
+                stream: stream_response(settings, response, true)?,
+                structured: true,
+                fallback: None,
+            });
+        }
+        let body: String = response
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(MAX_ERROR_BODY)
+            .collect();
+        if !matches!(status.as_u16(), 400 | 404 | 422) {
+            bail!("Model provider returned HTTP {status}: {body}");
+        }
+        if let Ok(mut set) = PLAIN_ONLY.get_or_init(Default::default).lock() {
+            set.insert(key);
+        }
+        fallback = Some(format!(
+            "Provider rejected structured output (HTTP {status}): {body}"
+        ));
+    }
+    let response = ensure_success(send(settings, api_key, system, prompt, None).await?).await?;
+    Ok(ModelStream {
+        stream: stream_response(settings, response, false)?,
+        structured: false,
+        fallback,
+    })
+}
+
+fn apply_schema(body: &mut Value, provider: Provider, responses_api: bool, schema: &OutputSchema) {
+    match provider {
+        Provider::OpenAiCompatible if responses_api => {
+            body["text"] = json!({ "format": {
+                "type": "json_schema", "name": schema.name, "strict": true, "schema": schema.schema
+            }});
+        }
+        Provider::OpenAiCompatible | Provider::AzureOpenAi => {
+            body["response_format"] = json!({ "type": "json_schema", "json_schema": {
+                "name": schema.name, "strict": true, "schema": schema.schema
+            }});
+        }
+        Provider::Anthropic => {
+            body["tools"] = json!([{
+                "name": schema.name,
+                "description": "Return exactly one decision in this format.",
+                "input_schema": schema.schema
+            }]);
+            body["tool_choice"] =
+                json!({ "type": "tool", "name": schema.name, "disable_parallel_tool_use": true });
+        }
+        Provider::Gemini => {
+            body["generationConfig"]["responseMimeType"] = json!("application/json");
+            body["generationConfig"]["responseJsonSchema"] = schema.schema.clone();
+        }
+    }
+}
+
+async fn send(
+    settings: &ModelSettings,
+    api_key: Option<&str>,
+    system: &str,
+    prompt: &str,
+    schema: Option<&OutputSchema<'_>>,
+) -> anyhow::Result<Response> {
     validate_settings(settings)?;
     if prompt.trim().is_empty() {
         bail!("Question cannot be empty");
     }
+    let clock = temporal_context()?;
+    let system = format!(
+        "{system}\n\nTrusted host clock context (system settings, not geolocation): {clock}\n\
+         Resolve today, tomorrow, this year and upcoming holidays using this clock, not your training cutoff. \
+         For 'this Thanksgiving', use the upcoming occurrence in the relevant holiday locale and state the exact dates/year. \
+         Do not ask the year if the current context and user wording resolve it. Respect explicit user dates. \
+         Timezone does not establish user location; clarify genuinely ambiguous holiday locales or date ranges. \
+         The current UTC offset is not a prediction of the offset on future travel dates."
+    );
     let endpoint = endpoint(settings)?;
     let responses_api = is_openai_responses(settings, &endpoint);
 
@@ -257,7 +423,7 @@ pub async fn instruction_stream(
     }
     let client = client.build().context("Creating model HTTP client")?;
     let mut request = client.post(endpoint);
-    let body = match settings.provider {
+    let mut body = match settings.provider {
         Provider::OpenAiCompatible if responses_api => {
             if let Some(key) = api_key.filter(|value| !value.is_empty()) {
                 request = request.bearer_auth(key);
@@ -292,7 +458,7 @@ pub async fn instruction_stream(
                 .header("anthropic-version", "2023-06-01");
             json!({
                 "model": settings.model,
-                "max_tokens": 2048,
+                "max_tokens": 8192,
                 "stream": true,
                 "system": system,
                 "messages": [{ "role": "user", "content": prompt }]
@@ -306,36 +472,65 @@ pub async fn instruction_stream(
                 "systemInstruction": { "parts": [{ "text": system }] },
                 "contents": [{ "role": "user", "parts": [{ "text": prompt }] },
                 ],
-                "generationConfig": { "maxOutputTokens": 2048 }
+                "generationConfig": { "maxOutputTokens": 8192 }
             })
         }
     };
+    if let Some(schema) = schema {
+        apply_schema(&mut body, settings.provider, responses_api, schema);
+    }
 
-    let response = request
+    request
         .header(header::CONTENT_TYPE, "application/json")
         .json(&body)
         .send()
         .await
-        .context("Connecting to the model provider")?;
-    let response = ensure_success(response).await?;
+        .context("Connecting to the model provider")
+}
+
+fn stream_response(
+    settings: &ModelSettings,
+    response: Response,
+    first_item_only: bool,
+) -> anyhow::Result<ChatStream> {
+    let responses_api = is_openai_responses(settings, &endpoint(settings)?);
     let provider = settings.provider;
 
     let stream = try_stream! {
         let mut bytes = response.bytes_stream();
         let mut pending = Vec::<u8>::new();
-        while let Some(chunk) = futures_util::StreamExt::next(&mut bytes).await {
-            pending.extend_from_slice(&chunk.context("Reading model response")?);
-            if pending.len() > 1_000_000 {
-                Err::<(), _>(anyhow::anyhow!("Model stream event exceeds the 1 MB safety limit"))?;
-            }
-            while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
-                let line = pending.drain(..=newline).collect::<Vec<_>>();
-                if let Some(delta) = parse_sse_line(&provider, responses_api, &line)? {
-                    yield delta;
+        // A structured reply is one schema-valid value per output item. Some models append
+        // further items (e.g. an imagined next step); only the first item is the decision.
+        let mut first_item: Option<Option<u64>> = None;
+        let mut ignored = false;
+        let mut finished = false;
+        while !finished {
+            let line = match pending.iter().position(|byte| *byte == b'\n') {
+                Some(newline) => pending.drain(..=newline).collect::<Vec<_>>(),
+                None => match futures_util::StreamExt::next(&mut bytes).await {
+                    Some(chunk) => {
+                        pending.extend_from_slice(&chunk.context("Reading model response")?);
+                        if pending.len() > 1_000_000 {
+                            Err::<(), _>(anyhow::anyhow!("Model stream event exceeds the 1 MB safety limit"))?;
+                        }
+                        continue;
+                    }
+                    None => {
+                        finished = true;
+                        std::mem::take(&mut pending)
+                    }
+                },
+            };
+            let Some((item, delta)) = parse_sse_line(&provider, responses_api, &line)? else {
+                continue;
+            };
+            if first_item_only && *first_item.get_or_insert(item) != item {
+                if !ignored {
+                    ignored = true;
+                    tracing::warn!("Ignored an extra model output item after the structured decision");
                 }
+                continue;
             }
-        }
-        if let Some(delta) = parse_sse_line(&provider, responses_api, &pending)? {
             yield delta;
         }
     };
@@ -421,11 +616,13 @@ fn make_user_prompt(question: &str, page_text: Option<&str>) -> String {
     }
 }
 
+/// One text delta and the output item it belongs to (Responses `output_index`, Anthropic
+/// content-block `index`; `None` for single-item streams).
 fn parse_sse_line(
     provider: &Provider,
     responses_api: bool,
     line: &[u8],
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<(Option<u64>, String)>> {
     let line = std::str::from_utf8(line)
         .context("Provider returned a malformed server-sent event")?
         .trim();
@@ -454,9 +651,19 @@ fn parse_sse_line(
             == Some("response.output_text.delta"))
         .then(|| value.get("delta").and_then(Value::as_str))
         .flatten()
-        .map(str::to_owned);
-        return Ok(text.filter(|text| !text.is_empty()));
+        .filter(|text| !text.is_empty())
+        .map(|text| {
+            (
+                value.get("output_index").and_then(Value::as_u64),
+                text.to_owned(),
+            )
+        });
+        return Ok(text);
     }
+    let item = match provider {
+        Provider::Anthropic => value.get("index").and_then(Value::as_u64),
+        _ => None,
+    };
     let text = match provider {
         Provider::OpenAiCompatible | Provider::AzureOpenAi => value
             .pointer("/choices/0/delta/content")
@@ -464,6 +671,8 @@ fn parse_sse_line(
             .map(str::to_owned),
         Provider::Anthropic => value
             .pointer("/delta/text")
+            // Forced-tool structured output streams the tool input as JSON fragments.
+            .or_else(|| value.pointer("/delta/partial_json"))
             .and_then(Value::as_str)
             .map(str::to_owned),
         Provider::Gemini => value
@@ -476,12 +685,37 @@ fn parse_sse_line(
                     .collect()
             }),
     };
-    Ok(text.filter(|text| !text.is_empty()))
+    Ok(text
+        .filter(|text| !text.is_empty())
+        .map(|text| (item, text)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clock_context_resolves_upcoming_us_thanksgiving_and_offsets() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-04T15:58:34-05:00").unwrap();
+        let context = temporal_context_at(now, "America/Chicago");
+        assert_eq!(context["currentYear"], 2026);
+        assert_eq!(context["timeZone"], "America/Chicago");
+        assert_eq!(context["utcOffsetSeconds"], -18000);
+        assert_eq!(context["localDate"], "2026-10-04");
+        assert_eq!(context["utcNow"], "2026-10-04T20:58:34+00:00");
+        assert_eq!(
+            context["calendarReferences"]["nextUsThanksgiving"],
+            "2026-11-26"
+        );
+        let after = chrono::DateTime::parse_from_rfc3339("2026-12-31T23:30:00-06:00").unwrap();
+        let context = temporal_context_at(after, "America/Chicago");
+        assert_eq!(context["currentYear"], 2026);
+        assert_eq!(
+            context["calendarReferences"]["nextUsThanksgiving"],
+            "2027-11-25"
+        );
+        assert_eq!(context["utcNow"], "2027-01-01T05:30:00+00:00");
+        assert!(temporal_context().is_ok());
+    }
     use futures_util::StreamExt;
     use std::{
         io::{BufRead, BufReader, Read, Write},
@@ -545,33 +779,35 @@ mod tests {
 
     #[test]
     fn parses_provider_stream_deltas() {
+        let text = |provider: Provider, responses: bool, line: &[u8]| {
+            parse_sse_line(&provider, responses, line)
+                .unwrap()
+                .map(|(_, text)| text)
+        };
         assert_eq!(
-            parse_sse_line(
-                &Provider::OpenAiCompatible,
+            text(
+                Provider::OpenAiCompatible,
                 false,
                 br#"data: {"choices":[{"delta":{"content":"Hello"}}]}"#
             )
-            .unwrap()
             .as_deref(),
             Some("Hello")
         );
         assert_eq!(
-            parse_sse_line(
-                &Provider::Anthropic,
+            text(
+                Provider::Anthropic,
                 false,
                 br#"data: {"delta":{"text":" there"}}"#
             )
-            .unwrap()
             .as_deref(),
             Some(" there")
         );
         assert_eq!(
-            parse_sse_line(
-                &Provider::Gemini,
+            text(
+                Provider::Gemini,
                 false,
                 br#"data: {"candidates":[{"content":{"parts":[{"text":"!"}]}}]}"#
             )
-            .unwrap()
             .as_deref(),
             Some("!")
         );
@@ -579,11 +815,10 @@ mod tests {
             parse_sse_line(
                 &Provider::OpenAiCompatible,
                 true,
-                br#"data: {"type":"response.output_text.delta","delta":"Responses API"}"#
+                br#"data: {"type":"response.output_text.delta","output_index":1,"delta":"Responses API"}"#
             )
-            .unwrap()
-            .as_deref(),
-            Some("Responses API")
+            .unwrap(),
+            Some((Some(1), "Responses API".into()))
         );
         assert_eq!(
             parse_sse_line(
@@ -712,7 +947,12 @@ mod tests {
         assert_eq!(body["model"], "sample-deployment");
         assert_eq!(body["input"], "say hello");
         assert_eq!(body["stream"], true);
-        assert_eq!(body["instructions"], "Return strict JSON decisions");
+        let instructions = body["instructions"].as_str().unwrap();
+        assert!(
+            instructions.starts_with("Return strict JSON decisions\n\nTrusted host clock context")
+        );
+        assert!(instructions.contains("\"timeZone\":"));
+        assert!(instructions.contains("\"utcNow\":"));
         assert_eq!(answer, "Foundry works");
     }
 
@@ -723,5 +963,192 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// Serves one scripted response per connection and returns each request body.
+    fn scripted_server(
+        responses: Vec<(u16, &'static str)>,
+    ) -> (std::net::SocketAddr, thread::JoinHandle<Vec<Value>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let mut bodies = Vec::new();
+            for (status, response_body) in responses {
+                let (socket, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let mut length = 0;
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header == "\r\n" || header.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                bodies.push(serde_json::from_slice(&body).unwrap());
+                let kind = if status == 200 {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
+                write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 {status} X\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                    response_body.len()
+                )
+                .unwrap();
+            }
+            bodies
+        });
+        (address, server)
+    }
+
+    async fn collect(mut stream: ChatStream) -> String {
+        let mut text = String::new();
+        while let Some(delta) = stream.next().await {
+            text.push_str(&delta.unwrap());
+        }
+        text
+    }
+
+    #[tokio::test]
+    async fn structured_output_uses_responses_json_schema() {
+        let (address, server) = scripted_server(vec![(
+            200,
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"{\\\"action\\\":\\\"unable\\\"}\"}\n\n",
+        )]);
+        let settings = ModelSettings {
+            base_url: format!("http://{address}/openai/v1/responses"),
+            model: "schema-model".into(),
+            ..ModelSettings::default()
+        };
+        let schema = json!({"type":"object","properties":{"action":{"type":"string"}},"required":["action"],"additionalProperties":false});
+        let reply = structured_stream(
+            &settings,
+            None,
+            "Decide",
+            "prompt",
+            &OutputSchema {
+                name: "decision",
+                schema: &schema,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(reply.structured && reply.fallback.is_none());
+        assert_eq!(collect(reply.stream).await, "{\"action\":\"unable\"}");
+        let body = &server.join().unwrap()[0];
+        assert_eq!(body["text"]["format"]["type"], "json_schema");
+        assert_eq!(body["text"]["format"]["strict"], true);
+        assert_eq!(body["text"]["format"]["name"], "decision");
+        assert_eq!(body["text"]["format"]["schema"], schema);
+    }
+
+    #[tokio::test]
+    async fn rejected_structured_output_falls_back_once_and_is_remembered() {
+        let plain = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n";
+        let (address, server) = scripted_server(vec![
+            (
+                400,
+                "{\"error\":{\"message\":\"response_format json_schema is not supported\"}}",
+            ),
+            (200, plain),
+            (200, plain),
+        ]);
+        let settings = ModelSettings {
+            base_url: format!("http://{address}/v1"),
+            model: "plain-only-model".into(),
+            ..ModelSettings::default()
+        };
+        let schema = json!({"type":"object"});
+        let output = OutputSchema {
+            name: "decision",
+            schema: &schema,
+        };
+        let first = structured_stream(&settings, None, "Decide", "prompt", &output)
+            .await
+            .unwrap();
+        assert!(!first.structured);
+        assert!(first.fallback.as_deref().unwrap().contains("not supported"));
+        assert_eq!(collect(first.stream).await, "ok");
+        let second = structured_stream(&settings, None, "Decide", "prompt", &output)
+            .await
+            .unwrap();
+        assert!(
+            !second.structured && second.fallback.is_none(),
+            "Unsupported endpoint is remembered"
+        );
+        assert_eq!(collect(second.stream).await, "ok");
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies[0]["response_format"]["type"], "json_schema");
+        assert_eq!(bodies[0]["response_format"]["json_schema"]["strict"], true);
+        assert!(bodies[1].get("response_format").is_none());
+        assert!(bodies[2].get("response_format").is_none());
+    }
+
+    #[tokio::test]
+    async fn structured_decision_ignores_an_extra_imagined_output_message() {
+        // Live failure: a decision, then a second message imagining the step's outcome.
+        let (address, server) = scripted_server(vec![(
+            200,
+            concat!(
+                "data: {\"type\":\"response.output_item.added\",\"output_index\":0}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"delta\":\"{\\\"action\\\":\"}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"delta\":\"\\\"hotelSearch\\\"}\"}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"output_index\":2,\"delta\":\"{\\\"action\\\":\\\"finish\\\"}\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"error\":null}}"
+            ),
+        )]);
+        let settings = ModelSettings {
+            base_url: format!("http://{address}/openai/v1/responses"),
+            model: "two-message-model".into(),
+            ..ModelSettings::default()
+        };
+        let schema = json!({"type":"object"});
+        let reply = structured_stream(
+            &settings,
+            None,
+            "Decide",
+            "prompt",
+            &OutputSchema {
+                name: "decision",
+                schema: &schema,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(collect(reply.stream).await, "{\"action\":\"hotelSearch\"}");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn anthropic_structured_output_streams_forced_tool_input() {
+        let delta = br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"action\":"}}"#;
+        assert_eq!(
+            parse_sse_line(&Provider::Anthropic, false, delta).unwrap(),
+            Some((Some(0), "{\"action\":".into()))
+        );
+        let mut body = json!({"model":"m"});
+        let schema = json!({"type":"object"});
+        apply_schema(
+            &mut body,
+            Provider::Anthropic,
+            false,
+            &OutputSchema {
+                name: "decision",
+                schema: &schema,
+            },
+        );
+        assert_eq!(body["tool_choice"]["name"], "decision");
+        assert_eq!(body["tool_choice"]["disable_parallel_tool_use"], true);
+        assert_eq!(body["tools"][0]["input_schema"], schema);
     }
 }

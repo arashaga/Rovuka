@@ -118,6 +118,10 @@ pub fn start() -> anyhow::Result<ServerInfo> {
                     )
                     .route("/api/agent/stop", post(agent_api::stop).options(preflight))
                     .route(
+                        "/api/agent/revoke-research",
+                        post(agent_api::revoke_research).options(preflight),
+                    )
+                    .route(
                         "/api/agent/reply",
                         post(agent_api::reply).options(preflight),
                     )
@@ -487,7 +491,7 @@ async fn handle_socket(socket: WebSocket) {
     let (snapshot, mut rx) = crate::bus::subscribe();
 
     let send_task = tokio::spawn(async move {
-        if let Some(ev) = snapshot {
+        for ev in snapshot {
             if send_event(&mut sink, &ev).await.is_err() {
                 return;
             }

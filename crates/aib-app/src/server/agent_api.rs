@@ -8,6 +8,8 @@ pub(super) struct StartRequest {
     share_page: bool,
     #[serde(default)]
     start_mode: crate::agent::StartMode,
+    #[serde(default)]
+    compare_options: bool,
 }
 
 pub(super) async fn view(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -54,6 +56,7 @@ pub(super) async fn start(
             settings,
             key,
             request.start_mode,
+            request.compare_options,
         )
     })();
     with_cors(
@@ -74,6 +77,8 @@ pub(super) struct ApprovalRequest {
     task_id: String,
     approval_id: String,
     allow: bool,
+    #[serde(default)]
+    allow_all_research: bool,
 }
 
 pub(super) async fn approve(
@@ -87,9 +92,12 @@ pub(super) async fn approve(
     control_response(
         &state.agent,
         &origin,
-        state
-            .agent
-            .approve(&request.task_id, &request.approval_id, request.allow),
+        state.agent.approve(
+            &request.task_id,
+            &request.approval_id,
+            request.allow,
+            request.allow_all_research,
+        ),
     )
 }
 
@@ -108,6 +116,21 @@ pub(super) async fn stop(
         return StatusCode::FORBIDDEN.into_response();
     };
     control_response(&state.agent, &origin, state.agent.stop(&request.task_id))
+}
+
+pub(super) async fn revoke_research(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<StopRequest>,
+) -> Response {
+    let Some(origin) = api_authorized(&headers, &state) else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    control_response(
+        &state.agent,
+        &origin,
+        state.agent.revoke_research(&request.task_id),
+    )
 }
 
 #[derive(Deserialize)]

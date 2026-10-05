@@ -1,10 +1,12 @@
-# AI Browser
+# Rovuka
 
 An AI-first, local-first task browser built on Chromium (CEF) with a Rust host and a React/TypeScript chrome UI.
 
-> Status: **Phase 3, first increment — approval-gated reader agent**. Model studio and page Q&A work; task mode can inspect pages and follow reviewed links. Full action automation, bundled inference and installers are not shipped yet.
+> Status: **Phase 3 reader agent + Phase 4 safety increment**. Model studio and page Q&A work; task mode can research with scoped permissions and provide numbered options with observed direct-site handoffs. Full action automation, the complete safety roadmap, bundled inference and installers are not shipped yet.
 
-Porting guidance is maintained in [Mac OS parity](mac-os-parity.md).
+Porting guidance is maintained in the local [Mac OS parity](mac-os-parity.md)
+guide, which is intentionally Git-ignored. Copy it separately when moving to
+a Mac; it is not included in a fresh clone.
 Update that document whenever a development phase introduces platform-specific
 behavior, dependencies, or packaging requirements.
 
@@ -12,7 +14,7 @@ behavior, dependencies, or packaging requirements.
 
 | Path | Purpose |
 |------|---------|
-| `crates/aib-app` | Main executable (`aibrowser.exe`): CEF bootstrap, window/tabs, localhost UI + IPC server |
+| `crates/aib-app` | Main executable (`rovuka.exe`): CEF bootstrap, window/tabs, localhost UI + IPC server |
 | `crates/aib-ipc` | Shared wire protocol between the chrome UI and the host |
 | `crates/aib-models` | Provider configuration, streaming chat, and secure API-key storage |
 | `crates/aib-local` | Hardware profile, loopback runtime discovery, reviewed model catalog and Ollama downloads |
@@ -38,7 +40,7 @@ $env:CEF_PATH = "$env:USERPROFILE\.local\share\cef"
 ```powershell
 cd ui; npm install; npm run build; cd ..   # UI is embedded into the binary
 cargo build
-.\target\debug\aibrowser.exe --url=https://example.com
+.\target\debug\rovuka.exe --url=https://example.com
 ```
 
 Flags:
@@ -48,7 +50,19 @@ Flags:
 - `--graphics=auto|software|gpu` — `auto` uses software rendering on Windows for graphics-driver compatibility, GPU on other platforms. Explicit `gpu` opts into hardware acceleration. Browser rendering does not determine local-model acceleration.
 - `--profile-dir=<absolute path>` — use a separate CEF profile, useful for disposable tests. Without this flag the usual user profile is used.
 
-Close the browser before rebuilding; running CEF processes can lock build output.
+Close the browser before rebuilding; running CEF processes lock `rovuka.exe` and
+the build fails. Always run the freshly built `.\target\debug\rovuka.exe`. If you
+are unsure which build is running, check the first line of the diagnostic log or
+the **Build** line on any failure screen (version, executable path and build time).
+Native fixtures can select an alternate executable with the absolute
+`AIB_TEST_BROWSER_EXE` environment variable; they still use disposable profiles.
+
+The app is now **Rovuka**: native window title, assistant branding, HTML title and
+executable name are updated. Launch `rovuka.exe`, not an old `aibrowser.exe`
+left in a previous build folder. The internal `AIBrowser` configuration/profile
+directories, credential-store service and `AIB_*` environment variables remain
+unchanged so existing keys, local-model preferences, cookies and settings work
+without migration. This rename does not create an installer.
 
 ## GPU context errors (Windows)
 
@@ -58,7 +72,7 @@ not a model endpoint error. The Windows default now disables hardware browser
 compositing and logs a compatibility warning rather than suppressing diagnostics.
 
 ```powershell
-.\target\debug\aibrowser.exe --graphics=software --url=https://example.com
+.\target\debug\rovuka.exe --graphics=software --url=https://example.com
 ```
 
 To compare hardware rendering, close the browser and launch with `--graphics=gpu`.
@@ -100,6 +114,20 @@ Remaining roadmap work: bundled llama.cpp, browser-owned verified GGUF cache,
 Foundry Local discovery, local embeddings and constrained tool calls. Phase 1
 multi-role routing and usage metering also remain; page Q&A is implemented.
 
+## Page questions versus web research
+
+**Ask this page** answers from the current page (when sharing is checked) or
+from the model alone. It does not search websites. Use **Research the web**
+beside the question composer for flights, hotels, shopping or sourced comparisons.
+This transfers your text into Task mode's search-first comparison form.
+Review the goal, grant page-sharing consent and choose **Start task**; transferring
+the request does not start research or approve navigation.
+
+If the current page has no readable text, the inline error offers **Research
+this request** and **Edit and retry**, preserving your original question.
+To ask the model without page context, uncheck **Use current page** and retry.
+This does not provide verified live availability or prices.
+
 ## Task mode: the first browser agent
 
 1. Open the browser and wait for the active tab to finish loading.
@@ -111,16 +139,342 @@ multi-role routing and usage metering also remain; page Q&A is implemented.
 4. Review the privacy note and explicitly allow sharing task pages with the model.
 5. Choose **Start task**. Watch the activity timeline.
 6. Review each proposed search query or link's exact URL and reason. Web searches
-   use Google and require approval before sending the query to that site.
+   use Google and require approval before sending the query to that site unless
+   you grant automatic research for this task.
    **Approve navigation**
    replaces the current page; **Decline & stop** performs no navigation.
+   **Allow all research for this task** approves this proposal and subsequent
+   search/observed-link navigation in this run. It does not authorize transactions.
 7. The outcome distinguishes **More details needed**, **No verified result**,
-   protocol failure and **Research brief ready**. When the assistant asks a
+   protocol failure and **Your results are ready**. When the assistant asks a
    question, type in **Your reply** directly beneath it and choose
    **Send reply & continue**. Each reply resumes the same task with the original
    goal, prior questions/replies, visited evidence and selected model. No need to
    edit the original goal or restart; no dates or travelers are guessed.
-   Source buttons reopen cited pages after a research brief is ready.
+   Source buttons open cited pages in new tabs after results are ready.
+8. **Searches performed** shows each approved query and whether its page was
+   actually read. An accepted final answer opens the full-width **Research
+   workspace** automatically; it does not leave the final result on Google.
+
+### Conversation layout and date awareness
+
+Questions and the reply composer stay together; search history and collapsed
+activity sit below the conversation, actions and result. **Expand task** gives
+the active conversation a centered, full-width workspace; **Show browser**
+returns to the sidebar without stopping the task.
+
+While running, **Working** has animated dots (static with reduced-motion enabled).
+The sticky header shows the latest native step and seconds spent on that step;
+this is waiting feedback, not invented progress or proof that a provider is healthy.
+Live activity opens automatically and its timeline follows new entries. Scrolling
+back pauses following; **Jump to latest** resumes it. While following, the
+workspace keeps the live timeline visible; scrolling upward pauses following. Approvals
+and questions take priority, and waiting/terminal states stop the working animation.
+Connection errors explicitly replace Working with a reconnecting status.
+
+A blocked navigation is a failed run, not a shortlist. The diagnostic includes
+destination origin/path and navigation type, omitting queries/fragments. A
+successfully repaired model-format diagnostic is explicitly marked repaired; a
+fatal second rejection opens its stage and exact cause.
+
+### Redirects during research
+
+Real sites redirect constantly (locale paths, `www` canonicalization, HTTPS
+upgrades, and search-result wrappers such as Google's `/goto?url=...`). The
+native guard applies one policy to **server redirects and script navigations
+without user activation**:
+
+- **Same site** (same host ignoring one leading `www.`, same port, same scheme
+  or an HTTP→HTTPS upgrade): followed inside the approved navigation, up to 8
+  hops. Each hop is listed in Activity and the Permission trail.
+- **Another website**: the load is cancelled before it starts and the task
+  pauses with **Follow this redirect to another website?** showing the real
+  destination. **Allow all research for this task** also covers these redirects
+  and records them. Declining stops the task; the other site is never opened.
+  At most 3 cross-site hops per approved navigation.
+- **Never followed**: checkout/account-changing destinations (same heuristic as
+  links), non-HTTP(S) schemes, embedded credentials, the trusted browser UI,
+  and redirect loops. These fail the task with the blocked destination.
+- Script navigations from the *previous* page while an approved navigation is
+  pending are cancelled, so they cannot replace the approved destination.
+  User-initiated clicks inside the task tab, non-GET navigation, popups and
+  downloads are still blocked.
+- Same-document URL updates (`pushState`, `replaceState`, fragments) keep the
+  task on the same page instead of failing with "page URL changed". Only moves
+  the guard approved are adopted; any other URL change still fails.
+
+These are research navigations only: following a redirect never submits forms,
+books or buys anything.
+
+Model repairs receive the **exact rejected response as quoted data**, along with
+the validation error and original evidence. Previously they received only the
+error text. Valid search/link actions missing a non-executable `reason` now show
+an explicit missing-explanation notice instead of aborting; the exact target,
+observed-link checks, approvals and task limits are unchanged. Empty queries,
+invented URLs/citations and multiple actions are still rejected.
+One narrow exception handles a reproduced provider response shape (relevant when a
+provider does not use structured output): exactly two
+byte-identical JSON objects collapse to one action with an explicit activity
+notice. Native validation and approval run before that single action; different
+objects, three copies, extra prose and duplicate JSON keys remain rejected.
+
+Per-option source arrays may be derived when omitted/empty **only from references
+already inside that same option**: inline citations, destination source IDs and
+price-component references. Native code deduplicates these IDs and checks them
+against the declared finish sources, visited pages, observed links and price
+evidence. It never substitutes the entire top-level source list or overwrites a
+nonempty declared option list. Options without any own references still fail.
+The activity trail records this normalization. Missing prices remain unavailable.
+
+**Inspect rejected model response** exposes the last rejected output in memory
+(up to the 32 KB decision limit), with attempt/stage/resolution status. It may
+contain task/page content: inspect before sharing. Starting a new task or closing
+the browser discards it from the UI (an excerpt is also in the local log below).
+Normal malformed output gets one repair, never an unbounded retry loop.
+
+### Structured decisions
+
+Every task decision is requested with the provider's **structured output** and a
+strict JSON schema named `browser_decision`: Responses API `text.format` (OpenAI,
+Microsoft Foundry v1), Chat Completions/Azure `response_format`, an Anthropic forced
+tool with `disable_parallel_tool_use`, or Gemini `responseJsonSchema`. The model fills
+typed fields of one flat object instead of writing free-form JSON: `action` is
+`search`, `flightSearch`, `hotelSearch`, `followLink`, `needsInput`, `unable` or
+`finish`, and fields that action does not use are `null`. The schema shapes output;
+native parsing, validation, approvals and price checks still decide what happens.
+
+- An endpoint that rejects schemas (HTTP 400/404/422) is retried once without one.
+  Activity shows "does not support structured output", the log records the provider
+  error, and that endpoint/model stays on validated plain JSON for the session.
+- Some models append a second output message after the decision (for example an
+  imagined result of the step). Structured streams keep only the first output item
+  and log "Ignored an extra model output item".
+- Unused fields are ignored. Unknown fields, missing required fields, empty queries
+  and invented URLs are still rejected and repaired once.
+- The log records `structured=true|false` for every decision.
+
+### Native flight and hotel search
+
+Travel prices no longer depend on generic web searches. The model returns typed
+parameters; native code validates them and builds a fixed `www.google.com` URL with
+`hl=en-US&gl=us&curr=USD`:
+
+- **`flightSearch`**: IATA origin/destination, `YYYY-MM-DD` dates (today to one year
+  ahead, return not before departure), adults, children and lap infants (at most 9
+  seats, no more infants than adults) and cabin. Native code encodes Google Flights'
+  `tfs` parameter. Fares include taxes and fees for all passengers, so
+  "$1,576 round trip" is the party total.
+- **`hotelSearch`**: place, check-in/check-out (1-30 nights) and **one room's** guests
+  (adults and child ages 0-17). Dates and guests are encoded in Google Hotels' `ts`
+  parameter and `q` is only `Hotels near <place>`. Google's natural-language parser
+  silently drops dates when the place contains a comma and shows default one-night
+  prices. The model multiplies the room total by the number of rooms.
+- Both use the research permission (approve, or allow all research) and appear in
+  **Searches performed** labelled **Flights** or **Hotels**. Their result pages are
+  directly read `page` sources, so quoted fares and stay totals can pass native price
+  verification; ordinary web-search pages remain leads.
+- Google Hotels cards show nightly rates; the stay total with taxes sits in each
+  card's hover panel. On Google travel pages only, the reader prepends a
+  **Google Hotels price cards** list built solely from strictly patterned values
+  (`$N nightly`, `$N total`, `N nights with taxes + fees`). No other hidden text is read.
+- An identical repeated search is rejected even after Google rewrites the URL
+  (`ved`, re-encoding): searches compare host, path and decoded `q`/`tfs`/`ts`.
+- Option cards show each component's cost, e.g. `Flight: United · $1,576.00` and
+  `Hotel: … · 2 × $777.00`, next to the ranked total.
+
+Reader rules: `aria-hidden` no longer hides content, because modal dialogs (such as a
+Google Hotels promo) set it on the still-visible page behind them; computed visibility
+and layout decide. Same-page `#fragment` links are never offered as navigation.
+
+`tfs` and `ts` are undocumented Google parameters, verified live on 2026-10-04 and
+pinned by unit tests. If Google changes them, `--live-web` shows the effect.
+
+### Diagnostics and logs
+
+Every launch appends to a local log at `%LOCALAPPDATA%\AIBrowser\logs\rovuka.log`
+(rotated to `rovuka.log.1` above 5 MB; override the folder with `AIB_LOG_DIR`,
+verbosity with `RUST_LOG`, default `info`). It records:
+
+- the build: version, executable path and its build time (spot stale binaries);
+- task start (goal, model, options), every Activity step and permission event;
+- each model decision's latency/size, and rejected model responses (≤4 KB) with
+  the validation stage and cause;
+- every navigation-guard decision with full URLs: same-site redirects followed,
+  cross-site redirects paused, blocked navigations/redirects, same-document URL
+  updates adopted, and any task-tab URL change that was **not** approved;
+- final status, page count, option count, or the full error cause chain.
+
+It stays on this machine and never contains API keys or page text, but it does
+contain your task text, visited URLs and model-output excerpts; delete it anytime.
+Failure screens and the research trail show the build and log path, plus
+**Copy diagnostic report**, which copies status, error, model diagnostics,
+Activity, permissions, searches and pages read as plain text.
+"Page URL changed" errors now name the expected and actual page (origin/path).
+
+Results also degrade instead of failing: an option price whose quotation is not
+found on the cited page is removed (shown as **Price unavailable**), and an option
+link that does not resolve to an observed link is dropped. Each removal appears
+in Activity. Neither can turn into an invented price or URL.
+
+For an opt-in end-to-end check on the **real web**,
+`node .\scripts\test-agent.cjs --live-web` runs your configured model on
+`AIB_LIVE_GOAL` (default: an Austin→LAX Thanksgiving flights + hotels request) in
+a disposable, signed-out profile with real Google search. It grants research
+permission on the first approval, answers one clarification generically, waits
+up to 11 minutes, then prints the result (each option's components, quotes and
+scope), Activity and log tail. Set `AIB_LIVE_SCREENSHOT=<absolute .png path>` to
+also capture the finished results screen. It incurs model
+usage and real site traffic; checkout/account pages, form submissions and
+downloads stay blocked. Site availability, bot checks and prices vary over time.
+
+For an opt-in real-provider smoke test, `node .\scripts\test-agent.cjs --live-model`
+uses the currently configured model/key without changing settings and sends only
+the scripted synthetic task and disposable loopback site evidence. This incurs
+model usage, uses no signed-in browser profile, permits only exact loopback
+destinations, and does not certify live travel availability. The default fixture
+command does not contact the configured cloud model. Add `--family` to exercise
+four travelers (including children aged 8 and 15) and two rooms against explicitly
+defined synthetic per-person/per-room rates.
+
+Developer regression: `--replay-option-sources <absolute-response-json-path>`
+replays the captured two-option/five-source failure shape using local fixture
+observations and source/link IDs. It does not contact a cloud model or certify
+the captured claims against live pages. Keep captured responses outside the
+repository because they can include personal task/page content.
+
+Failures and no-evidence outcomes also open the workspace automatically, rather
+than leaving an empty web area with an easy-to-miss sidebar error. The exact
+protocol diagnostic is visible. **Retry with my details** fills a new task form
+with the original goal and user replies, requiring fresh page-sharing consent.
+It does not resume or pretend to repair a failed task.
+
+Every model request (including page Q&A and task corrections) receives the
+system clock's current UTC/local timestamp, local date/year, IANA timezone and
+current UTC offset. Task prompts also retain a start-time anchor across replies.
+The model is instructed to resolve relative dates and state exact dates instead
+of asking a year already implied by the clock. For example, on October 4, 2026,
+upcoming US Thanksgiving is November 26, 2026. US Thanksgiving calendar dates
+are calculated natively, not guessed from model training data.
+
+The clock/timezone are shared with the selected model. They are based on OS
+settings, not geolocation; keep those settings correct. Ambiguous holiday locales
+or travel ranges can still need clarification. A current UTC offset does not
+predict daylight-saving offsets at a future destination. These are model
+instructions, not a guarantee that every model interprets dates correctly.
+
+### Actionable results workspace
+
+The results view is action-first: a short summary, then numbered choices and
+provider links. Supporting reports, caveats, source pages and search/activity
+history sit **below the options**, collapsed when there is a shortlist.
+Each option's detailed evidence and tradeoffs are expandable, not a wall of prose.
+
+The default **Result format → Actionable options · prices & direct links** requires a
+structured final report, rather than accepting only prose. The planner is asked
+for 2-4 concrete alternatives when evidence supports them. Cards are always
+numbered **Option 1, Option 2, ...**, including the best-fit card. There is
+no forced minimum: missing alternatives must be explained, not invented.
+Choose **Research brief / explanation** for explanatory tasks and compatibility
+with models that only return a cited plain answer.
+
+**Travel:** when flights and hotels are requested together, instructions require
+named flight + hotel combinations, dates, travelers/rooms/nights, separate
+flight/hotel links (or an observed package link), and comparable cost breakdowns.
+**Shopping:** named products/variants, compatibility and seller links come first.
+General services and explanatory questions have their own guidance. The embedded
+instruction profiles live under `crates/aib-app/src/instructions/`; the model
+selects the matching intent without an extra classification call or brittle
+keyword router. Rebuild the native binary after editing those instructions.
+
+**Price ordering is native, not a model's claimed ranking.** Optional offers use
+integer minor-unit amounts and quantities, with exact short price quotations from
+directly read page text. Native code checks quotation/amount provenance, computes
+component subtotals (for example round-trip fare x travelers + nightly room rate x
+room-nights), and sorts ascending **within the same currency, cost basis and
+scope**. The best-fit recommendation stays attached to its option after sorting.
+Mixed groups are labelled; currencies are not converted, nightly/per-person
+costs are not ranked against whole-trip costs. Unpriced options follow priced
+groups and explicitly say **Price unavailable**.
+
+USD/EUR/GBP/CAD/AUD with English-style currency-prefixed decimal prices are
+currently supported. Other formats require an unpriced option, not guessed
+conversion. Search snippets cannot support a priced offer. A flight + hotel trip
+subtotal requires both priced components. Exclusions remain visible in details;
+taxes, bags, resort fees and shipping are not assumed included.
+These checks establish snapshot provenance and arithmetic, **not** semantic
+correctness, live inventory or a bookable quote. The bounded reader cannot
+operate airline/hotel date pickers; if provider pages do not expose suitable
+prices, it must say so rather than fabricate a cheap trip.
+
+Each option can include up to three direct-site buttons for manual booking,
+buying or further reading. The model references observed `sourceId`/`linkId`
+pairs; native code resolves the URLs and rejects missing/invented links. Labels
+identify whether a destination was read or is only a link observed on a source.
+Legacy option reports fall back to directly read source pages, not search
+snippets disguised as bookable offers. When no destination was established,
+the card says so explicitly. An observed destination is not verified stock,
+availability or a guarantee that it matches the option.
+
+Click a direct-site button to open the real website in a new foreground tab with
+user control. The current tab is not replaced, and the results stay available
+through **View findings** at the top of the Task mode sidebar. This also applies
+to citations, source cards and search-history links, including sidebar sources.
+Dates, variants, rooms, availability, taxes and final prices must be checked
+there. No automatic checkout, form filling, booking or purchase takes place.
+
+Recommendations are model judgments, not independent certification. Every option
+and finding must reference visited sources included in the accepted answer.
+Unknown source IDs, invalid recommendation indexes, oversized report fields and
+unsupported report properties are rejected and get the existing one correction
+attempt. In **Research brief / explanation**, models that return the older answer-only shape remain supported
+and receive a readable brief, without manufactured option cards.
+
+Search pages are labeled **Search lead**, not verified offers. The planner is
+instructed to follow relevant publisher/provider links after useful searches
+instead of repeatedly rephrasing queries, and to finish with explicit gaps when
+the six-page budget is exhausted. This is model guidance, not a guarantee that
+every model will research optimally.
+
+**Back to conversation** restores the sidebar. Opening a source/revisiting a
+search opens a new tab and returns to normal browsing. **View findings** reopens the same
+in-memory report without another model call. **New task** replaces that run when
+started. Failures/no-evidence open automatically; for stopped runs, **View research trail**
+shows an incomplete result with the failure and observed pages—never a fake winner.
+
+This view expands the existing trusted CEF assistant across the content area;
+it does not navigate the web tab to a token-bearing UI URL or execute model HTML.
+Model strings are rendered as React text. Findings and conversations are
+session-only, not saved/exported reports yet.
+
+### Phase 4 increment: research permission controls
+
+- Defaults to **ask before each navigation**. Pending approvals have a visible
+  waiting banner, prominent primary button and a gentle halo. The halo respects
+  reduced-motion preferences; it never auto-confirms an action.
+- **Allow all research for this task** is explicit, cross-site and session-only.
+  It authorizes validated searches, observed-link GET navigation and redirects
+  those pages make to other websites for this
+  task, with the existing six-page/ten-minute limits. It includes sharing read
+  page content with the selected model and using the browser's existing profile.
+- The automatic-research banner includes **Ask before each navigation** to
+  revoke the grant for subsequent proposals. Use **Stop / take over** to cancel
+  current model/reader waits; a previously issued load cannot be unsent.
+- Grants expire on completion, failure, no evidence, cancellation or manual
+  takeover, and never transfer to a new task. Stale approvals cannot grant them.
+- The native guard still blocks non-GET navigation, popups, downloads and
+  redirects into checkout/account pages (see **Redirects during research**).
+  Recognizable checkout/account-changing
+  paths/actions are conservatively refused during research and left for manual
+  handoff. This URL heuristic is not comprehensive action detection: GET requests
+  and site scripts can have side effects, and ordinary signed-in cookies/network
+  activity still apply.
+- A timestamped **Permission trail** records one-time approvals, automatic
+  navigation authorization, revocation and expiry, with exact destination URLs.
+  It appears in Activity and the final research trail, in memory only.
+
+This increment is not the whole safety phase: isolated task profiles, a
+quarantined reader, comprehensive secret redaction, a critic, durable audit
+storage and strong transaction confirmation remain before broader automation.
 
 For example, "Find flights and hotels from Austin to Cancun" lacks dates,
 travelers and rooms. The model is instructed to ask for those details before
@@ -157,6 +511,13 @@ without exposing raw model output. Complete JSON code fences and numeric grouped
 citations such as `[1, 2]` are accepted; unsupported actions and unvisited IDs
 are still rejected. The screenshot's failure is a rejected model decision, not
 proof of verified prices on a Google-generated overview.
+The task waits up to 30 seconds for the approved page to settle and checks
+consecutive not-loading states before reading/accepting a decision. Guard-approved
+moves (same-site redirects, same-document URL updates) are adopted; a loading race
+in the reader or just before approved navigation is retried within that bound.
+Unapproved URL changes, blocked redirects/downloads, closed/switched
+tabs, other CDP failures and persistent loading still fail explicitly.
+Cancellation interrupts those waits; no navigation approval is bypassed.
 Empty/unvisited source lists never become accepted research results.
 Repeated invalid output fails with an actionable message, not a fabricated answer. The
 runtime permits at most **six pages**, **two minutes per model decision**, and
@@ -165,8 +526,9 @@ At most **five clarification questions** are allowed per task. Stop/manual
 takeover cancels a waiting question; duplicate, stale or late replies are rejected.
 Questions and user replies are sent to the pinned model and kept only in memory.
 
-During a run, native navigation guards block unapproved main-frame navigations
-(including redirects and non-GET form navigation), popups and downloads. Every
+During a run, native navigation guards block user-initiated or non-GET main-frame
+navigation, redirects into checkout/account pages, popups and downloads; other
+redirects follow the redirect policy above. Every
 model-proposed navigation needs a fresh, single-use approval; approvals cannot
 be reused after stopping.
 
@@ -225,13 +587,34 @@ bounded correction and no-evidence outcomes. They are simulated protocol tests,
 not a real airfare/hotel search or a live-model accuracy benchmark.
 The harness also exercises the native React task form, consent, approval and
 result flow, keyboard focus, the visible sticky stop control and 320px light/dark
-layouts. It does not call your cloud model or modify your normal settings.
+layouts. Additional fixtures exercise a non-travel comparison, explanatory
+findings without a winner, report-source rejection, same-URL loading churn,
+native full-width expansion and source/back/reopen navigation. It does not call
+your cloud model or modify your normal settings.
+Result-link checks verify new foreground tabs, exact hotel/flight/seller and
+source destinations, unchanged existing tabs and preserved findings without
+new model calls. Returning after closing a destination tab is also covered.
+It also checks comparison-format correction, observed direct destinations,
+invented-link rejection, scoped grants/revocation/expiry, page bounds, native
+redirect/download guards under automatic research, manual option handoff,
+approval visibility and reduced-motion behavior.
 The harness opens a temporary debug port; close it after testing.
 `AIB_MODEL_SETTINGS_FILE=<absolute file path>` overrides the model settings file
 for isolated development tests; unset it for normal use. API keys are still in
 the system credential store, never in that file.
 `AIB_AGENT_TEST_SEARCH_URL` is a numeric-loopback-only test override used by the
 harness to avoid real search traffic. Leave it unset for normal Google searches.
+`AIB_AGENT_TEST_TRAVEL_URL` likewise points native flight/hotel searches at a
+loopback fixture; the harness checks the encoded `tfs`/`ts` dates and travelers,
+the hidden-total price-card digest, structured-output requests, and the one-time
+plain-JSON fallback.
+For optional visual inspection, run `node .\scripts\test-agent.cjs --inspect`.
+`AIB_TEST_SCREENSHOT=<absolute image path>` saves a native findings screenshot
+during the fixture run. The harness closes its own browser afterward.
+`AIB_TEST_APPROVAL_SCREENSHOT=<absolute image path>` captures the pending
+approval screen, including the scoped allow-all choice.
+`AIB_TEST_CONVERSATION_SCREENSHOT=<absolute image path>` saves the focused
+full-width task question/reply screen during an ordinary fixture run.
 
 ## Notes
 
