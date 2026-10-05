@@ -29,3 +29,5 @@ futures-util.workspace = true
 url.workspace = true
 async-stream.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+regex = "1"
+percent-encoding = "2"

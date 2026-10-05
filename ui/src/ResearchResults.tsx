@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { host } from './ipc.ts'
 import { taskActive, type Task, type ResearchReport } from './taskTypes.ts'
 import TaskDiagnostic, { DiagnosticActions } from './TaskDiagnostic.tsx'
+import SafetyNotice from './SafetyNotice.tsx'
 
 type Offer = NonNullable<ResearchReport['options'][number]['offer']>
 const bases: Record<Offer['basis'], string> = {
@@ -93,6 +94,7 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
           <span>{task.model}</span>
         </div>}
       </header>
+      <SafetyNotice task={task} />
       {!complete && <article className="findings-card findings-incomplete">
         <h2>{task.error?.includes('unapproved navigation') ? 'A website navigation was blocked' : 'No accepted final recommendation'}</h2>
         <p>{task.error || task.message || 'The task stopped before a final brief was accepted.'}</p>

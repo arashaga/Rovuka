@@ -54,11 +54,19 @@ async function connectCdp(url) {
 async function main() {
   const liveWeb = process.argv.includes('--live-web');
   const liveModel = process.argv.includes('--live-model') || liveWeb;
+  const safetyOnly = process.argv.includes('--safety-only');
+  const shutdownOnly = process.argv.includes('--shutdown-only');
   const fixtureParty = liveModel && process.argv.includes('--family')
     ? 'two adults and two children ages 8 and 15, two hotel rooms for five nights; the fixture charges the same fare for each traveler'
     : 'two adults, one hotel room for five nights';
   const root = path.resolve(__dirname, '..');
   const captureArgument = process.argv.indexOf('--replay-option-sources');
+  assert(!safetyOnly || (!liveModel && captureArgument < 0), 'Safety checks must use only local fixtures');
+  assert(!shutdownOnly || (!liveModel && captureArgument < 0), 'Shutdown checks must use only local fixtures');
+  const privacyToken = ['sk', 'simulatedfixture'.repeat(3)].join('-');
+  const privacyCard = ['4111', '1111', '1111', '1111'].join(' ');
+  const privateValues = [privacyToken, privacyCard, 'fixturePagePassword', 'fixtureTitlePassword',
+    'fixtureGoalPassword', 'fixtureReplyPassword', 'fixtureNestedSecret', 'fixtureNavigationSecret', 'fixtureRedirectSecret'];
   let capturedResponse;
   if (captureArgument >= 0) {
     assert(!liveModel, 'Captured response replay must never use a cloud model');
@@ -122,7 +130,13 @@ async function main() {
           }
         }
         let decision;
-        if (!input?.userGoal) decision = 'mock page answer';
+        if (!input?.userGoal) {
+          if (prompt.includes('privacy chat fixture')) {
+            for (const value of privateValues) assert(!prompt.includes(value), 'A private value reached page Q&A');
+            assert(prompt.includes('[redacted]'));
+            decision = 'privacy-safe page answer';
+          } else decision = 'mock page answer';
+        }
         else {
           assert(system.includes('TRAVEL intent:') && system.includes('SHOPPING intent:') && system.includes('GENERAL action intent:'), 'Intent guidance must reach each agent request and correction');
           assert(input.taskStartedAt.timeZone, 'Task relative-date anchor needs timezone');
@@ -141,7 +155,25 @@ async function main() {
           }
           if (input.userGoal.includes('slow')) await delay(input.userGoal.includes('live-monitor') ? 6000 : 2500);
           if (input.userGoal.includes('push state')) await delay(2500);
-          if (input.userGoal === 'Replay captured option sources') {
+          if (input.userGoal.startsWith('privacy shield fixture')) {
+            for (const value of privateValues) assert(!prompt.includes(value), 'A private value reached the planner');
+            assert(current.text.includes('USD 238.00'), 'Ordinary travel prices must not be masked');
+            assert(current.text.includes('2026-11-23 2026-11-28'), 'Travel dates must not be masked');
+            assert.equal(current.links.length, 1, 'Credential-bearing links must be excluded');
+            assert.equal(current.links[0].id, 3, 'Safe observed link IDs must not be renumbered');
+            decision = JSON.stringify({ action: 'finish', answer: 'Public hotel information remains readable [1].', sources: [1] });
+          } else if (input.userGoal === 'privacy clarification fixture') {
+            for (const value of privateValues) assert(!prompt.includes(value), 'A private reply reached the planner');
+            if (!replies.length) decision = JSON.stringify({ action: 'needsInput', message: 'Which public details should I compare?' });
+            else {
+              assert(replies[0].content.includes('[redacted]'), 'A labelled private reply must be masked');
+              decision = JSON.stringify({ action: 'finish', answer: 'Public details remain available [1].', sources: [1] });
+            }
+          } else if (input.userGoal === 'sensitive outbound query fixture') {
+            decision = JSON.stringify({ action: 'search', query: 'password: fixtureNavigationSecret', reason: 'An unsafe query must never execute' });
+          } else if (input.userGoal === 'sensitive redirect fixture') {
+            decision = JSON.stringify({ action: 'followLink', linkId: current.links.find(link => link.url.endsWith('/privacy-redirect')).id, reason: 'Read the provider details' });
+          } else if (input.userGoal === 'Replay captured option sources') {
             assert(capturedResponse, 'Captured replay requires local file');
             decision = pages.length < 5
               ? JSON.stringify({action:'followLink',linkId:1,reason:'Read next fixture observation'})
@@ -367,8 +399,29 @@ async function main() {
       // Google-style opaque result wrapper: the destination is only known after the redirect.
       if (route === '/goto') { res.writeHead(302, { Location: `${crossBase}/landing` }); res.end(); return; }
       if (route === '/redirect-checkout') { res.writeHead(302, { Location: '/checkout' }); res.end(); return; }
+      if (route === '/privacy-redirect') {
+        res.writeHead(302, { Location: '/privacy-exfil?access_token=fixtureRedirectSecret' }); res.end(); return;
+      }
       const redirectLoop = route.match(/^\/redirect-loop\/(\d+)$/);
       if (redirectLoop) { res.writeHead(302, { Location: `/redirect-loop/${Number(redirectLoop[1]) + 1}` }); res.end(); return; }
+      if (route === '/privacy' || route === '/privacy-start') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        if (route === '/privacy') {
+          res.end(`<!doctype html><title>Privacy fixture password: fixtureTitlePassword</title><h1>Public hotel information</h1>
+            <p>2026-11-23 2026-11-28. Two adults. Hotel USD 238.00 per night. Four stars.</p>
+            <p>password: fixturePagePassword</p><p>API key: ${privacyToken}</p>
+            <p>Verification code: 123456</p><p>Card ${privacyCard}</p>
+            <p>Hidden URL https://site.test/?next=password%253DfixtureNestedSecret</p>
+            <a href="/privacy-exfil?token=fixturePagePassword">Sensitive link</a>
+            <a href="/privacy-exfil?next=password%253DfixtureNestedSecret">Nested sensitive link</a>
+            <a href="/hotel-valley">View hotel</a>`);
+          return;
+        }
+        if (route === '/privacy-start') {
+          res.end('<!doctype html><title>Provider lead</title><h1>Provider lead</h1><p>Read-only research fixture.</p><a href="/privacy-redirect">Read provider</a>');
+          return;
+        }
+      }
       if (route === '/js-redirect') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end("<!doctype html><title>Redirecting</title><h1>Redirecting</h1><p>Taking you to the provider page.</p><script>location.replace('/js-landing')</script>");
@@ -491,7 +544,7 @@ async function main() {
   try {
     const browserExecutable = process.env.AIB_TEST_BROWSER_EXE || path.join(root, 'target', 'debug', 'rovuka.exe');
     assert(path.isAbsolute(browserExecutable), 'Browser test executable override must be an absolute path');
-    const childEnv = { ...process.env, AIB_AGENT_TEST_SEARCH_URL: `${fixtureBase}/search`, AIB_AGENT_TEST_TRAVEL_URL: fixtureBase, AIB_LOG_DIR: temp };
+    const childEnv = { ...process.env, AIB_AGENT_TEST_SEARCH_URL: `${fixtureBase}/search`, AIB_AGENT_TEST_TRAVEL_URL: fixtureBase, AIB_LOG_DIR: temp, AIB_AUDIT_DIR: path.join(temp, 'Audit') };
     if (liveWeb) { delete childEnv.AIB_AGENT_TEST_SEARCH_URL; delete childEnv.AIB_AGENT_TEST_TRAVEL_URL; }
     if (liveModel) delete childEnv.AIB_MODEL_SETTINGS_FILE;
     else childEnv.AIB_MODEL_SETTINGS_FILE = settings;
@@ -500,6 +553,7 @@ async function main() {
       { cwd: root, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', chunk => { logs += chunk; });
     child.stderr.on('data', chunk => { logs += chunk; });
+    child.on('exit', (code, signal) => { logs += `Test browser exit: code=${code}, signal=${signal}\n`; });
     await waitFor(() => {
       assert(child.exitCode === null, `Browser exited early:\n${logs}`);
       const plain = logs.replace(/\u001b\[[0-9;]*m/g, '');
@@ -619,6 +673,231 @@ async function main() {
     const approve = (view, allow = true, allowAllResearch = false) => rpc('/api/agent/approve', { taskId: view.id, approvalId: view.pending.id, allow, allowAllResearch });
     const replyTo = (view, message, expected = 200) => rpc('/api/agent/reply',
       { taskId: view.id, questionId: view.questionId, message }, expected);
+    const closeTestBrowser = async () => {
+      const request = spawn('powershell.exe', ['-NoProfile', '-Command',
+        `$p=Get-Process -Id ${child.pid} -ErrorAction Stop; if(-not $p.CloseMainWindow()){throw 'The test browser did not accept its window-close request'}`],
+        { stdio: ['ignore', 'ignore', 'pipe'] });
+      let failure = '';
+      request.stderr.on('data', data => { failure += data; });
+      const [code] = await once(request, 'exit');
+      assert.equal(code, 0, failure.trim());
+      await waitFor(() => child.exitCode !== null || child.signalCode !== null, 'clean browser shutdown', 30000);
+      assert.equal(child.exitCode, 0, `Test browser shutdown failed: ${child.signalCode || child.exitCode}`);
+    };
+    const safetyChecks = async () => {
+      const unauthenticated = await fetch(`${base}/api/safety`);
+      assert.equal(unauthenticated.status, 403);
+      const foreign = await fetch(`${base}/api/safety`, { headers: { 'x-aib-token': token, Origin: 'https://foreign.test' } });
+      assert.equal(foreign.status, 403);
+      await rpc('/api/safety/clear', { confirm: false }, 400);
+      console.log('PASS: safety history requires the native UI token and trusted origin; deletion requires affirmative confirmation');
+
+      await navigate('/privacy');
+      const submitted = await start('privacy shield fixture password: fixtureGoalPassword');
+      assert(!submitted.goal.includes('fixtureGoalPassword'));
+      let view = await terminal();
+      assert.equal(view.status, 'completed', view.error);
+      assert(view.privacy.redactions >= 6);
+      assert.equal(view.privacy.blockedLinks, 2);
+      assert(view.auditEnabled && view.auditError === null);
+      assert(view.steps.some(step => step.includes('Privacy shield')));
+      for (const value of privateValues) assert(!JSON.stringify(view).includes(value), 'Task UI/diagnostics must not retain recognized secrets');
+      const privacyRun = view;
+      const overviewResponse = await fetch(`${base}/api/safety`, { headers: { 'x-aib-token': token } });
+      assert.equal(overviewResponse.headers.get('cache-control'), 'no-store');
+      const overview = await overviewResponse.json();
+      const record = overview.records.find(record => record.id === view.id);
+      assert(record);
+      assert.equal(record.status, 'completed');
+      assert.deepEqual(record.origins, [fixtureBase]);
+      assert.deepEqual(Object.keys(record).sort(), ['id','startedAt','updatedAt','status','pagesRead','searches','options','privacy','origins','events'].sort());
+      assert(!JSON.stringify(record).includes('privacy shield fixture'), 'Audit must not store the goal');
+      assert(!JSON.stringify(record).includes('Public hotel information'), 'Audit must not store model answers or page text');
+      assert.deepEqual(JSON.parse(await fs.readFile(path.join(temp, 'Audit', `${view.id}.json`), 'utf8')), record);
+      console.log('PASS: native privacy masks user/page secrets, preserves hotel prices/dates, filters sensitive links without changing IDs; redacted metadata is durably saved');
+
+      const chat = await fetch(`${base}/api/chat/stream`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-aib-token': token },
+        body: JSON.stringify({ question: 'privacy chat fixture password: fixtureGoalPassword',
+          pageText: `API key: ${privacyToken}\nCard ${privacyCard}\nHotel USD 238.00.` }),
+      });
+      assert.equal(chat.status, 200);
+      const chatEvents = await chat.text();
+      assert(chatEvents.includes('event: privacy'));
+      assert(chatEvents.includes('"redactions":3'));
+      assert(chatEvents.includes('privacy-safe page answer'));
+      console.log('PASS: page Q&A uses the same native masking and reports its redaction count before answer deltas');
+
+      await navigate();
+      await start('privacy clarification fixture');
+      view = await waitFor(async () => {
+        const task = await rpc('/api/agent');
+        return task.status === 'needsInput' && task;
+      }, 'privacy clarification');
+      await replyTo(view, 'password: fixtureReplyPassword');
+      view = await terminal();
+      assert.equal(view.status, 'completed', view.error);
+      assert(view.privacy.redactions >= 1);
+      assert(!JSON.stringify(view).includes('fixtureReplyPassword'));
+      console.log('PASS: conversational replies are masked before continuing the same audited task');
+
+      const searchesBefore = hits.get('/search') || 0;
+      await navigate();
+      await start('sensitive outbound query fixture');
+      view = await terminal();
+      assert.equal(view.status, 'failed');
+      assert.match(view.error, /sensitive credentials/i);
+      assert.equal(hits.get('/search') || 0, searchesBefore, 'Sensitive query must never reach a search site');
+      assert.equal(view.pending, null);
+      console.log('PASS: a model-generated sensitive query is refused before approval or network navigation, even after output masking');
+
+      const leaksBefore = hits.get('/privacy-exfil') || 0;
+      await navigate('/privacy-start');
+      await start('sensitive redirect fixture');
+      view = await pending();
+      await approve(view, true, true);
+      view = await terminal();
+      assert.equal(view.status, 'failed');
+      assert.match(view.error, /sensitive|private codes/i);
+      assert.equal(hits.get('/privacy-exfil') || 0, leaksBefore);
+      assert.equal(view.researchPermission, 'askEach');
+      console.log('PASS: native redirect guard refuses credential-bearing redirects under allow-all; no secret destination request executes');
+
+      await navigate();
+      await start('Verify the details for my research brief');
+      view = await pending();
+      await rpc('/api/safety/clear', { confirm: true }, 409);
+      const auditDirectory = path.join(temp, 'Audit');
+      const pausedDirectory = path.join(temp, 'Audit-paused');
+      const detailsBefore = hits.get('/details') || 0;
+      await fs.rename(auditDirectory, pausedDirectory);
+      try {
+        await rpc('/api/agent/approve', { taskId: view.id, approvalId: view.pending.id, allow: true, allowAllResearch: false }, 409);
+        view = await terminal();
+        assert.equal(view.status, 'failed');
+        assert(view.auditError && view.error.includes('could not be saved'));
+        assert.equal(view.pending, null);
+        assert.equal(hits.get('/details') || 0, detailsBefore, 'Audit failure must stop the newly approved navigation');
+      } finally { await fs.rename(pausedDirectory, auditDirectory); }
+      console.log('PASS: an audit write failure stops the task and exposes its error; active audit deletion is refused');
+
+      await navigate();
+      await start('privacy clarification fixture');
+      view = await waitFor(async () => {
+        const task = await rpc('/api/agent');
+        return task.status === 'needsInput' && task;
+      }, 'audited reply waiting');
+      const callsBeforeReply = modelCalls;
+      await fs.rename(auditDirectory, pausedDirectory);
+      try {
+        await replyTo(view, 'password: fixtureReplyPassword', 409);
+        view = await terminal();
+        assert.equal(view.status, 'failed');
+        assert(view.auditError && view.questionId === null);
+        await delay(250);
+        assert.equal(modelCalls, callsBeforeReply, 'A reply whose audit failed must not reach the model');
+      } finally { await fs.rename(pausedDirectory, auditDirectory); }
+      console.log('PASS: reply continuation is not signalled until its audit is saved; storage failure cannot trigger another model call');
+
+      const targets = await (await fetch(`http://127.0.0.1:${nativePort}/json/list`)).json();
+      if (!targets.some(target => target.url.startsWith(base) && target.url.includes('surface=assistant'))) {
+        await browserSocket.command('Runtime.evaluate', { expression: 'document.querySelector(".ask-ai").click()' });
+      }
+      const target = await waitFor(async () => {
+        const targets = await (await fetch(`http://127.0.0.1:${nativePort}/json/list`)).json();
+        return targets.find(target => target.url.startsWith(base) && target.url.includes('surface=assistant'));
+      }, 'safety assistant view');
+      const assistant = await connectCdp(target.webSocketDebuggerUrl);
+      try {
+        const taskWorkspace = await assistant.command('Runtime.evaluate', { expression:
+          '!!document.querySelector(".task-mode,.research-results")', returnByValue: true });
+        if (taskWorkspace.result.value) {
+          await waitFor(async () => {
+            const state = await assistant.command('Runtime.evaluate', { expression:
+              `document.querySelector(".findings-goal")?.textContent===${JSON.stringify(view.goal)} && !!document.querySelector(".safety-notice.safety-warning [role=alert]")`,
+              returnByValue: true });
+            return state.result?.value;
+          }, 'latest failed task has finished automatic findings presentation');
+          await assistant.command('Runtime.evaluate', { expression:
+            'Array.from(document.querySelectorAll(".findings-nav button")).find(button=>button.textContent==="Back to conversation").click()' });
+        } else {
+          await browserSocket.command('Runtime.evaluate', { expression:
+            `window.__agentTestConnection.send(${JSON.stringify(JSON.stringify({ type: 'setAssistantExpanded', expanded: false }))})` });
+        }
+        await waitFor(async () => {
+          const state = await assistant.command('Runtime.evaluate', { expression:
+            'Array.from(document.querySelectorAll(".assistant-tabs button")).some(button=>button.textContent==="Safety" && !button.disabled)', returnByValue: true });
+          return state.result?.value;
+        }, 'Safety tab is available after the failed task');
+        await assistant.command('Runtime.evaluate', { expression:
+          'Array.from(document.querySelectorAll(".assistant-tabs button")).find(button=>button.textContent==="Safety").click()' });
+        await waitFor(async () => {
+          const state = await assistant.command('Runtime.evaluate', { expression:
+            'document.querySelectorAll(".safety-run").length>0 && !document.querySelector(".safety-center [role=alert]")', returnByValue: true });
+          return state.result?.value;
+        }, 'local audit UI rendered');
+        for (const theme of ['light', 'dark']) {
+          await assistant.command('Emulation.setDeviceMetricsOverride', { width:320, height:780, deviceScaleFactor:1, mobile:false });
+          const layout = await assistant.command('Runtime.evaluate', { expression:
+            `document.documentElement.dataset.theme=${JSON.stringify(theme)}; document.querySelector(".safety-center").clientWidth===document.querySelector(".safety-center").scrollWidth && document.body.clientWidth===document.body.scrollWidth`, returnByValue: true });
+          assert.equal(layout.result.value, true, `${theme}: safety UI must fit 320px without horizontal overflow`);
+        }
+        await assistant.command('Emulation.clearDeviceMetricsOverride');
+        if (process.env.AIB_TEST_SAFETY_SCREENSHOT) {
+          assert(path.isAbsolute(process.env.AIB_TEST_SAFETY_SCREENSHOT));
+          const capture = await assistant.command('Page.captureScreenshot', { format:'png' });
+          await fs.writeFile(process.env.AIB_TEST_SAFETY_SCREENSHOT, Buffer.from(capture.data, 'base64'));
+        }
+        await assistant.command('Runtime.evaluate', { expression:
+          'Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:async value=>{window.__copiedAudit=value}}}); Array.from(document.querySelectorAll(".safety-audit-actions button")).find(button=>button.textContent==="Copy redacted audit").click()' });
+        await waitFor(async () => {
+          const state = await assistant.command('Runtime.evaluate', { expression: '!!window.__copiedAudit', returnByValue: true });
+          return state.result?.value;
+        }, 'audit copy payload');
+        const copied = await assistant.command('Runtime.evaluate', { expression: 'window.__copiedAudit', returnByValue: true });
+        const exported = JSON.parse(copied.result.value);
+        assert.deepEqual(Object.keys(exported), ['records'], 'Copy must exclude the OS path and settings');
+        for (const value of privateValues) assert(!copied.result.value.includes(value));
+        assert(!copied.result.value.includes('privacy shield fixture'));
+        await assistant.command('Runtime.evaluate', { expression:
+          'Array.from(document.querySelectorAll(".safety-audit-actions button")).find(button=>button.textContent==="Clear history").click()' });
+        await waitFor(async () => {
+          const state = await assistant.command('Runtime.evaluate', { expression: '!!document.querySelector(".safety-clear")', returnByValue: true });
+          return state.result?.value;
+        }, 'audit clear requires a second confirmation');
+        await assistant.command('Runtime.evaluate', { expression:
+          'Array.from(document.querySelectorAll(".safety-clear button")).find(button=>button.textContent==="Keep history").click()' });
+        assert((await rpc('/api/safety')).records.length > 0);
+        const lastTask = await rpc('/api/agent');
+        await assistant.command('Runtime.evaluate', { expression:
+          'Array.from(document.querySelectorAll(".safety-audit-actions button")).find(button=>button.textContent==="Clear history").click()' });
+        await assistant.command('Runtime.evaluate', { expression:
+          'Array.from(document.querySelectorAll(".safety-clear button")).find(button=>button.textContent==="Delete local audit").click()' });
+        await waitFor(async () => (await rpc('/api/safety')).records.length === 0, 'explicit audit deletion');
+        assert.equal((await rpc('/api/agent')).id, lastTask.id, 'Clearing audit must not replace session findings');
+        assert.equal((await fs.readdir(auditDirectory)).filter(file => file.endsWith('.json')).length, 0);
+        console.log('PASS: Safety UI fits both 320px themes; copy contains redacted metadata only; clear requires confirmation and preserves the session task');
+      } finally { assistant.close(); }
+      const diagnostic = await fs.readFile(path.join(temp, 'rovuka.log'), 'utf8');
+      for (const value of privateValues) {
+        assert(!diagnostic.includes(value), 'Diagnostic log must not contain recognizable fixture secrets');
+        assert(!logs.includes(value), 'Console diagnostics must not contain recognizable fixture secrets');
+      }
+      assert(diagnostic.includes('[redacted]'));
+      assert.equal(fixtureError, undefined, fixtureError);
+      console.log('PASS: persistent and console diagnostics contain no recognized secrets from goals, pages, model output or blocked redirects');
+      return privacyRun.id;
+    };
+    if (shutdownOnly) {
+      await closeTestBrowser();
+      console.log('PASS: native window, CEF and trusted server shut down without a forced process kill');
+      return;
+    }
+    if (safetyOnly) {
+      await safetyChecks();
+      await closeTestBrowser();
+      return;
+    }
     if(capturedResponse) {
       await navigate('/citation-page/1');
       await rpc('/api/agent',{goal:'Replay captured option sources',sharePage:true,startMode:'currentPage',compareOptions:true});
@@ -1828,6 +2107,7 @@ async function main() {
     assert.equal(plainCalls, 2);
     assert((await fs.readFile(path.join(temp, 'rovuka.log'), 'utf8')).includes('continuing without a response schema'));
     console.log('PASS: endpoint without structured-output support falls back once to validated plain JSON and is remembered');
+    await safetyChecks();
     if (process.argv.includes('--inspect')) {
       await navigate();
       await start('Verify the details for my research brief');
@@ -1838,13 +2118,10 @@ async function main() {
     }
     // Close only the browser created by this test, via its CDP browser connection.
     if (child.exitCode === null) {
-      const version = await (await fetch(`http://127.0.0.1:${nativePort}/json/version`)).json();
-      cdpSocket = new WebSocket(version.webSocketDebuggerUrl);
-      await once(cdpSocket, 'open');
-      cdpSocket.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
-      await waitFor(() => child.exitCode !== null, 'clean browser shutdown', 10000);
+      await closeTestBrowser();
     }
   } catch (error) {
+    if (fixtureError) console.error(fixtureError);
     console.error(logs.replace(/\u001b\[[0-9;]*m/g, ''));
     console.error(error);
     throw error;

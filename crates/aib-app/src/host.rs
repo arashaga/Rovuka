@@ -219,6 +219,19 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
     let result = target
         .ok_or_else(|| anyhow::anyhow!("Task stopped: its tab was closed or you switched tabs."))
         .and_then(|(info, browser)| {
+            let lease = match &request {
+                HostRequest::Begin { lease_id, .. }
+                | HostRequest::Lease { lease_id, .. }
+                | HostRequest::Navigate { lease_id, .. } => Some(lease_id.clone()),
+                HostRequest::Call { .. } => Some(with_state(|s| {
+                    s.agent_guard.as_ref().filter(|g| g.tab_id == info.id)
+                        .map(|g| g.lease_id.clone())
+                }).ok_or_else(|| anyhow::anyhow!("Task stopped: its native lease was released"))?),
+                _ => None,
+            };
+            if lease.as_deref().is_some_and(|id| !crate::bus::task_active(id)) {
+                anyhow::bail!("Task stopped: its native lease is no longer active");
+            }
             if let Some(blocked) = with_state(|s| {
                 s.agent_guard
                     .as_ref()
@@ -962,6 +975,7 @@ wrap_window_delegate! {
                 s.closing = true;
                 s.live_browsers.clone()
             });
+            tracing::info!(browsers = browsers.len(), "Browser window close requested");
             let mut all_closed = true;
             for b in browsers {
                 if let Some(host) = b.host() {
@@ -974,6 +988,7 @@ wrap_window_delegate! {
         }
 
         fn on_window_destroyed(&self, _window: Option<&mut Window>) {
+            tracing::info!("Browser window destroyed");
             with_state(|s| {
                 s.tabs.clear();
                 s.window = None;
@@ -1374,6 +1389,7 @@ wrap_life_span_handler! {
         fn on_before_close(&self, browser: Option<&mut Browser>) {
             if guarded_tab(browser.as_deref()) { crate::bus::take_over(); }
             let Some(id) = browser_id(browser) else { return };
+            tracing::info!(browser = id, "CEF browser closing");
             crate::cdp::close(id);
             let reopen = with_state(|s| {
                 s.live_browsers.retain(|b| b.identifier() != id);

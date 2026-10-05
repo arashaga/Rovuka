@@ -786,11 +786,51 @@ summary:focus-visible {
 
 .assistant-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   flex-shrink: 0;
   padding: 8px 12px;
   border-bottom: 1px solid var(--cp-border);
 }
+
+.safety-center { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 16px; color: var(--cp-text); }
+.safety-heading h2 { font-size: 24px; line-height: 1.2; letter-spacing: -0.5px; margin: 8px 0; }
+.safety-heading p, .safety-protections p, .safety-limits p { font-size: 12px; line-height: 1.6; color: var(--cp-text-muted); }
+.safety-protections { display: grid; gap: 8px; margin: 16px 0; }
+.safety-protections article { padding: 12px; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-surface); }
+.safety-protections strong { font-size: 12px; }
+.safety-protections p { margin: 6px 0 0; }
+.safety-limits, .safety-storage { font-size: 11px; color: var(--cp-text-muted); line-height: 1.55; margin: 12px 0; overflow-wrap: anywhere; }
+.safety-limits summary, .safety-storage summary { cursor: pointer; font-weight: 600; color: var(--cp-text-soft); }
+.safety-audit { border-top: 1px solid var(--cp-border); margin-top: 20px; padding-top: 20px; }
+.safety-audit-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.safety-audit-heading h3 { margin: 4px 0; font-size: 19px; }
+.safety-audit-heading button { font-size: 11px; padding: 8px 12px; }
+.safety-audit-note, .safety-audit-count { color: var(--cp-text-muted); font-size: 11px; line-height: 1.55; }
+.safety-empty { padding: 16px; background: var(--cp-surface-soft); border-radius: 10px; font-size: 12px; }
+.safety-empty p { color: var(--cp-text-muted); margin-bottom: 0; }
+.safety-audit-list { display: grid; gap: 8px; margin-top: 12px; }
+.safety-run { border: 1px solid var(--cp-border); border-radius: 10px; padding: 12px; background: var(--cp-surface); min-width: 0; overflow-wrap: anywhere; }
+.safety-run summary { cursor: pointer; display: grid; gap: 6px; }
+.safety-run summary time, .safety-run summary small { font-size: 11px; color: var(--cp-text-muted); }
+.safety-run-status { width: fit-content; padding: 4px 8px; border-radius: 6px; background: var(--cp-accent-soft); color: var(--cp-accent); font-size: 11px; font-weight: 600; }
+.safety-run-status.failed { color: var(--cp-danger); }
+.safety-run > p { font-size: 11px; line-height: 1.55; color: var(--cp-text-muted); }
+.safety-run ol { padding: 0; list-style: none; display: grid; gap: 12px; }
+.safety-run li { display: grid; gap: 3px; font-size: 11px; line-height: 1.5; }
+.safety-run li time, .safety-run li span { color: var(--cp-text-muted); }
+.safety-origins { display: flex; flex-wrap: wrap; gap: 4px; }
+.safety-origins span { padding: 4px 6px; background: var(--cp-surface-soft); border-radius: 6px; font-size: 10px; }
+.safety-audit-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.safety-audit-actions button { font-size: 11px; padding: 8px 10px; }
+.safety-clear { margin-top: 12px; padding: 12px; border: 1px solid var(--cp-border-strong); border-radius: 10px; background: var(--cp-surface); font-size: 12px; }
+.safety-clear p { color: var(--cp-text-muted); font-size: 11px; line-height: 1.55; }
+.safety-feedback { padding: 10px; border-radius: 10px; background: var(--cp-accent-soft); color: var(--cp-text-soft); font-size: 11px; line-height: 1.55; }
+.safety-notice { margin: 8px 0 12px; color: var(--cp-text-muted); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.safety-notice summary { cursor: pointer; color: var(--cp-text-soft); }
+.safety-notice p { margin: 8px 0; padding-left: 8px; border-left: 2px solid var(--cp-border); }
+.safety-warning { color: var(--cp-danger); }
+.task-privacy-note { font-size: 11px; line-height: 1.55; color: var(--cp-text-muted); }
 
 .assistant-tabs button {
   min-height: 36px;

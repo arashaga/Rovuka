@@ -2,7 +2,7 @@
 
 An AI-first, local-first task browser built on Chromium (CEF) with a Rust host and a React/TypeScript chrome UI.
 
-> Status: **Phase 3 reader agent + Phase 4 safety increment**. Model studio and page Q&A work; task mode can research with scoped permissions and provide numbered options with observed direct-site handoffs. Full action automation, the complete safety roadmap, bundled inference and installers are not shipped yet.
+> Status: **Phase 3 reader agent + Phase 4 privacy, permissions and local audit**. Model studio and page Q&A work; task mode can research with scoped permissions and provide numbered options with observed direct-site handoffs. Full action automation, the complete safety roadmap, bundled inference and installers are not shipped yet.
 
 Porting guidance is maintained in the local [Mac OS parity](mac-os-parity.md)
 guide, which is intentionally Git-ignored. Copy it separately when moving to
@@ -472,9 +472,67 @@ session-only, not saved/exported reports yet.
   navigation authorization, revocation and expiry, with exact destination URLs.
   It appears in Activity and the final research trail, in memory only.
 
-This increment is not the whole safety phase: isolated task profiles, a
-quarantined reader, comprehensive secret redaction, a critic, durable audit
-storage and strong transaction confirmation remain before broader automation.
+This is not the whole safety phase: isolated task profiles, a quarantined LLM
+reader, comprehensive personal-data detection, a critic and strong transaction
+confirmation remain before broader automation. Native privacy checks and a
+durable, metadata-only audit are now implemented as described below.
+
+### Phase 4 increment: privacy shield and local task audit
+
+Open **Ask AI → Safety** to review the research boundaries and local audit.
+The privacy shield is always enabled; it cannot be turned off by a model or an
+allow-all research grant.
+
+- **Before model calls:** task goals/replies, page text, titles, headings and
+  link labels are checked natively. Recognizable API tokens, labelled passwords,
+  bearer tokens, private keys, one-time codes, US SSN-shaped strings and
+  Luhn-valid card numbers are replaced with `[redacted]`. A saved model key is
+  also masked by exact value once loaded. Page Q&A uses the same checks and
+  displays a masking notice. Ordinary prices, traveler counts and travel dates
+  are preserved.
+- **Before navigation:** sensitive query parameters (such as `access_token`,
+  `password`, signed-link signatures and OAuth codes), recognizable secrets and
+  redacted placeholders are refused in research URLs. Percent-encoded values
+  are checked too. Unsafe observed links are excluded without renumbering safe
+  link IDs. The native redirect guard applies the same rule, even under
+  allow-all; the normal user's manual browsing is unchanged.
+- **Before diagnostics:** complete tracing records are buffered and masked
+  before console/file output, including secrets split across formatter writes.
+  Diagnostic logs can still contain other personal task text and URLs, and old
+  log generations are not retroactively scrubbed. Do not publish them unreviewed.
+- **Local audit:** each task atomically updates a small JSON record under
+  `%LOCALAPPDATA%\AIBrowser\task-audit`. It contains timestamps, last recorded
+  status, counts, site origins and permission decisions—not the goal, page text,
+  answer, full URL/query/fragment, model endpoint or credential. Up to 50 recent
+  records are retained. The report and conversation are still session-only.
+  An audit is not replay, task resumption, or tamper-proof evidence.
+- **Explicit storage failures:** a task cannot start if its audit cannot be
+  saved. A later audit write failure stops the run and exposes the error instead
+  of silently claiming an audited result. Approval/reply continuations are
+  signalled only after persistence succeeds, and native leases reject commands
+  from failed/stopped tasks.
+- **Controls:** Safety can copy the redacted audit (excluding the OS storage
+  path) or delete it after a second confirmation. Deletion is refused while a
+  task is active. Clearing it does not delete session findings or diagnostic
+  logs. Audit data is never uploaded automatically; site origins/timestamps
+  can still be personal, so review a copy before sharing.
+
+`AIB_AUDIT_DIR=<absolute directory>` overrides the audit location for development.
+The native fixtures set it to their disposable directory, not your real history.
+Files use the OS user's directory permissions (0600 on Unix); they are plain
+JSON, not encrypted. A record left by a crash shows its **last recorded** state,
+not a currently running or resumable task.
+
+Closing the browser stops and joins the trusted server runtime and its
+filesystem workers before CEF shutdown. This prevents audit work from being
+abandoned during native teardown.
+
+**Limits:** deterministic masking is defense in depth, not comprehensive secret
+or personal-data detection. It cannot reliably identify every custom token or
+instruction hidden in a webpage. Page data remains untrusted, and no separate
+quarantined LLM reader or critic has been added. Existing cookies, website
+scripts and their network requests still run. Do not share sensitive pages you
+would not otherwise send to your model. Production sandboxing remains pending.
 
 For example, "Find flights and hotels from Austin to Cancun" lacks dates,
 travelers and rooms. The model is instructed to ask for those details before
@@ -499,7 +557,8 @@ It uses CEF's **in-process CDP**, so task mode does not require a remote debuggi
 port. A reader runs in an isolated JavaScript world and returns bounded rendered
 text (12,000 characters), headings and up to 80 named HTTP(S) links. Hidden text,
 input/textarea/select values and contenteditable text are excluded by the reader;
-this is not comprehensive secret redaction of visible page content.
+native privacy checks also mask recognizable secrets in visible content. This
+is not comprehensive detection of sensitive information.
 
 The model must produce a strict JSON decision: search, select an observed link
 ID, request details, explain insufficient evidence, or finish with an answer
@@ -535,7 +594,8 @@ be reused after stopping.
 **Important limits:** This is a reader agent, not a full operator. No clicking,
 typing, uploads, purchases, unapproved autonomous search, screenshot/vision fallback,
 accessibility-tree merge, iframe/shadow-DOM traversal, parallel research or
-persistent audit storage is implemented yet. Ordinary site scripts, their
+full snapshot/replay audit is implemented yet. The durable audit is metadata
+only. Ordinary site scripts, their
 network requests and existing signed-in cookies remain active. Even a GET link
 can have side effects on poorly designed sites: review each URL carefully.
 The development browser's production sandbox work also remains unfinished.
@@ -594,6 +654,24 @@ your cloud model or modify your normal settings.
 Result-link checks verify new foreground tabs, exact hotel/flight/seller and
 source destinations, unchanged existing tabs and preserved findings without
 new model calls. Returning after closing a destination tab is also covered.
+Safety checks verify masking before task/page-Q&A model calls, unchanged prices
+and dates, withheld sensitive links, blocked secret-bearing queries/redirects,
+metadata-only audit files, failed approval/reply persistence, token/origin controls,
+320px light/dark UI, copy and confirmed deletion without losing session findings.
+For a focused, loopback-only safety run after building:
+
+```powershell
+node .\scripts\test-agent.cjs --safety-only
+```
+
+`--shutdown-only` checks native window/server/CEF shutdown with the same isolated
+fixture storage and no model request.
+
+Current Windows verification: **69 workspace Rust tests and all 76 native
+browser checks pass**, including the 10 focused safety checks. UI type-check,
+production UI build, native build and graceful shutdown checks also pass.
+These local fixtures do not certify live model accuracy or macOS readiness.
+
 It also checks comparison-format correction, observed direct destinations,
 invented-link rejection, scoped grants/revocation/expiry, page bounds, native
 redirect/download guards under automatic research, manual option handoff,

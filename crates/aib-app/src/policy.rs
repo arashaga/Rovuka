@@ -28,7 +28,7 @@ pub enum Redirect {
 pub fn classify_redirect(current: &str, target: &str) -> Redirect {
     let Ok(target) = crate::agent::validate_navigation(target) else {
         return Redirect::Forbidden(
-            "its destination is not an HTTP(S) URL without embedded credentials",
+            "its destination contains sensitive credentials/private codes or is not a safe HTTP(S) URL",
         );
     };
     if requires_manual_handoff(&target) {

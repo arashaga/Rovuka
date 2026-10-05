@@ -30,18 +30,43 @@ use std::{
 
 mod agent_api;
 mod local_api;
+mod safety_api;
 
 #[derive(RustEmbed)]
 #[folder = "../../ui/dist"]
 #[allow_missing = true]
 struct UiAssets;
 
-#[derive(Clone)]
 pub struct ServerInfo {
     pub port: u16,
     pub token: String,
     /// URL the chrome UI BrowserView should load.
     pub ui_url: String,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<anyhow::Result<()>>>,
+}
+
+impl ServerInfo {
+    pub fn shutdown(&mut self) -> anyhow::Result<()> {
+        crate::bus::take_over();
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("The trusted UI server thread panicked"))??;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ServerInfo {
+    fn drop(&mut self) {
+        if let Err(error) = self.shutdown() {
+            tracing::error!("Trusted UI server shutdown failed: {error:#}");
+        }
+    }
 }
 
 struct AppState {
@@ -56,23 +81,27 @@ struct AppState {
 pub fn start() -> anyhow::Result<ServerInfo> {
     let token = random_token();
     let model_settings = aib_models::load_settings()?;
+    let audit = Arc::new(crate::audit::Store::open()?);
     let (tx, rx) = std::sync::mpsc::channel();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
     let token_for_thread = token.clone();
 
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("aib-server".into())
-        .spawn(move || {
+        .spawn(move || -> anyhow::Result<()> {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
                 .build()
-                .expect("tokio runtime");
-            rt.block_on(async move {
+                .context("Could not create the trusted UI runtime")?;
+            let result = rt.block_on(async move {
                 let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
                     Ok(l) => l,
                     Err(e) => {
-                        let _ = tx.send(Err(anyhow::anyhow!(e)));
-                        return;
+                        let error =
+                            anyhow::Error::new(e).context("Could not bind the trusted UI server");
+                        let _ = tx.send(Err(anyhow::anyhow!("{error:#}")));
+                        return Err(error);
                     }
                 };
                 let port = listener.local_addr().unwrap().port();
@@ -96,7 +125,7 @@ pub fn start() -> anyhow::Result<ServerInfo> {
                     allowed_origins,
                     settings: RwLock::new(model_settings),
                     downloads: Arc::new(tokio::sync::Semaphore::new(1)),
-                    agent: Arc::new(crate::agent::Service::default()),
+                    agent: Arc::new(crate::agent::Service::new(audit)),
                 });
                 crate::bus::set_agent(state.agent.clone());
                 let app = Router::new()
@@ -125,6 +154,11 @@ pub fn start() -> anyhow::Result<ServerInfo> {
                         "/api/agent/reply",
                         post(agent_api::reply).options(preflight),
                     )
+                    .route("/api/safety", get(safety_api::overview).options(preflight))
+                    .route(
+                        "/api/safety/clear",
+                        post(safety_api::clear).options(preflight),
+                    )
                     .route("/api/local", get(local_api::overview).options(preflight))
                     .route(
                         "/api/local/preferences",
@@ -142,18 +176,43 @@ pub fn start() -> anyhow::Result<ServerInfo> {
                     .fallback(static_handler)
                     .with_state(state);
 
-                let _ = tx.send(Ok(ServerInfo {
-                    port,
-                    token: token_for_thread,
-                    ui_url,
-                }));
-                if let Err(e) = axum::serve(listener, app).await {
-                    tracing::error!("server stopped: {e}");
+                tx.send(Ok((port, token_for_thread, ui_url)))
+                    .map_err(|_| anyhow::anyhow!("The UI server startup caller disconnected"))?;
+                tokio::select! {
+                    biased;
+                    _ = stopped => Ok(()),
+                    result = async { axum::serve(listener, app).await } => {
+                        result.context("The trusted UI server stopped unexpectedly")
+                    }
                 }
             });
+            // Join the runtime's blocking workers before Windows terminates process threads.
+            drop(rt);
+            tracing::info!("Trusted UI server runtime stopped");
+            result
         })?;
 
-    let info = rx.recv()??;
+    let startup = rx.recv();
+    let (port, server_token, ui_url) = match startup {
+        Ok(Ok(info)) => info,
+        result => {
+            thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("The trusted UI server startup thread panicked"))??;
+            return Err(match result {
+                Ok(Err(error)) => error,
+                Err(error) => error.into(),
+                Ok(Ok(_)) => unreachable!(),
+            });
+        }
+    };
+    let info = ServerInfo {
+        port,
+        token: server_token,
+        ui_url,
+        stop: Some(stop),
+        thread: Some(thread),
+    };
     debug_assert_eq!(info.token, token);
     tracing::info!(port = info.port, "UI server listening");
     Ok(info)
@@ -448,11 +507,17 @@ async fn chat_stream(
             &origin,
         );
     }
+    if let Some(key) = &api_key {
+        crate::privacy::remember_secret(key);
+    }
+    let question = crate::privacy::redact(&request.question);
+    let page = request.page_text.as_deref().map(crate::privacy::redact);
+    let redactions = question.count + page.as_ref().map_or(0, |page| page.count);
     let stream = match aib_models::chat_stream(
         &settings,
         api_key.as_deref(),
-        &request.question,
-        request.page_text.as_deref(),
+        &question.text,
+        page.as_ref().map(|page| page.text.as_str()),
     )
     .await
     {
@@ -471,11 +536,19 @@ async fn chat_stream(
         ),
         Err(error) => {
             tracing::warn!("Model response stream failed: {error:#}");
-            Ok(SseEvent::default()
-                .event("error")
-                .data(json!({ "message": error.to_string() }).to_string()))
+            Ok(SseEvent::default().event("error").data(
+                json!({ "message": crate::privacy::redact(&error.to_string()).text }).to_string(),
+            ))
         }
     });
+    let events = futures_util::stream::once(async move {
+        Ok::<SseEvent, Infallible>(
+            SseEvent::default()
+                .event("privacy")
+                .data(json!({ "redactions": redactions }).to_string()),
+        )
+    })
+    .chain(events);
     let response = Sse::new(events)
         .keep_alive(KeepAlive::default())
         .into_response();
@@ -483,7 +556,11 @@ async fn chat_stream(
 }
 
 fn api_error(status: StatusCode, message: &str) -> Response {
-    (status, Json(json!({ "error": message }))).into_response()
+    (
+        status,
+        Json(json!({ "error": crate::privacy::redact(message).text })),
+    )
+        .into_response()
 }
 
 async fn handle_socket(socket: WebSocket) {

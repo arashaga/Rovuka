@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent;
+mod audit;
 mod bus;
 mod cdp;
 mod diagnostics;
@@ -8,6 +9,7 @@ mod graphics;
 mod host;
 mod offers;
 mod policy;
+mod privacy;
 mod protocol;
 mod server;
 
@@ -51,7 +53,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         tracing::info!("Hardware browser rendering enabled");
     }
-    let server = server::start()?;
+    let mut server = server::start()?;
     let start_url = {
         let v = CefString::from(&cmd_line.switch_value(Some(&CefString::from("url")))).to_string();
         (!v.is_empty()).then_some(v)
@@ -95,6 +97,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     run_message_loop();
+    tracing::info!("Browser message loop ended");
+    let server_shutdown = server.shutdown();
     shutdown();
+    tracing::info!("CEF shutdown finished");
+    server_shutdown?;
     Ok(())
 }

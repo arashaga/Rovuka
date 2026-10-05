@@ -19,6 +19,8 @@ local-runtimes.json
 /profile/
 /profiles/
 /test-results/
+/task-audit/
+/audit-exports/
 /playwright-report/
 *.pem
 *.key

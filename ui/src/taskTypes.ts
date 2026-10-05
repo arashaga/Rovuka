@@ -33,6 +33,7 @@ export interface ResearchReport {
 
 export interface Task {
   id: string
+  startedAt: string
   goal: string
   model: string
   status: TaskStatus
@@ -56,6 +57,9 @@ export interface Task {
   compareOptions: boolean
   build: string
   logFile: string | null
+  privacy: { redactions: number; blockedLinks: number }
+  auditEnabled: boolean
+  auditError: string | null
 }
 
 export const taskActive = (task: Task | null) =>

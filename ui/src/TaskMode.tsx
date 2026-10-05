@@ -3,6 +3,7 @@ import { apiRequest } from './modelApi.ts'
 import { host } from './ipc.ts'
 import { taskActive as active, type Task, type TaskStatus } from './taskTypes.ts'
 import ResearchResults, { SearchTrail } from './ResearchResults.tsx'
+import SafetyNotice from './SafetyNotice.tsx'
 import TaskDiagnostic, { DiagnosticActions } from './TaskDiagnostic.tsx'
 
 const labels: Record<TaskStatus, string> = {
@@ -215,6 +216,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '' }: { onA
           ? 'Plans a search without reading or sharing the starting tab. You approve its query and URL before opening Google; this replaces the page in your active tab.'
           : `Reads ${pageTitle || 'your active webpage'}, not the whole web. Choose Search the web if this page is unrelated.`}
           {' '}Pages read by the task are shared with your selected model. Do not use sensitive pages unless you intend to share them.</p>
+        <p className="task-privacy-note">Privacy shield is always on. Recognizable secrets are masked, but detection is not exhaustive. A local audit keeps status, site origins and permissions—not your goal, pages or answers.</p>
         <label className="check-label">
           <input type="checkbox" checked={sharePage} disabled={active(task) || busy} onChange={event => setSharePage(event.target.checked)} />
           Allow sharing task pages with my selected model
@@ -253,6 +255,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '' }: { onA
             {active(task) && <button className="assistant-secondary" disabled={busy}
               onClick={() => void send('/api/agent/stop', { taskId: task.id })}>Stop / take over</button>}
           </div>
+          <SafetyNotice task={task} />
           <div className="task-conversation" aria-label="Task conversation">
             {task.conversation.map((message, index) => <article key={index} className={`task-message ${message.role}`}>
               <strong>{message.role === 'user' ? 'You' : 'Assistant'}</strong>

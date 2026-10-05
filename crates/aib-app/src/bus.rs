@@ -31,6 +31,10 @@ pub fn take_over() {
     }
 }
 
+pub fn task_active(id: &str) -> bool {
+    AGENT.get().is_some_and(|service| service.task_active(id))
+}
+
 fn events() -> &'static broadcast::Sender<Event> {
     EVENTS.get_or_init(|| broadcast::channel(256).0)
 }

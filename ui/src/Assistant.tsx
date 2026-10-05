@@ -3,6 +3,7 @@ import { apiHeaders, apiUrl, host, type HostEvent, type PageTextEvent } from './
 import { apiRequest, readEvents, type ModelSettings, type Provider } from './modelApi.ts'
 import LocalModels from './LocalModels.tsx'
 import TaskMode from './TaskMode.tsx'
+import SafetyCenter from './SafetyCenter.tsx'
 
 interface ChatMessage {
   id: string
@@ -11,6 +12,7 @@ interface ChatMessage {
   pageTitle?: string
   failure?: string
   researchGoal?: string
+  redactions?: number
 }
 
 const defaults: Record<Provider, Pick<ModelSettings, 'baseUrl' | 'model' | 'apiVersion'>> = {
@@ -39,7 +41,7 @@ const defaults: Record<Provider, Pick<ModelSettings, 'baseUrl' | 'model' | 'apiV
 export default function Assistant() {
   const [settings, setSettings] = useState<ModelSettings | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [panel, setPanel] = useState<'chat' | 'local' | 'task'>('chat')
+  const [panel, setPanel] = useState<'chat' | 'local' | 'task' | 'safety'>('chat')
   const [taskActive, setTaskActive] = useState(false)
   const [taskGoal, setTaskGoal] = useState('')
   const [expanded, setExpanded] = useState(false)
@@ -156,8 +158,9 @@ export default function Assistant() {
         }),
       })
       await readEvents(response, (eventType, data) => {
-        const value = JSON.parse(data) as { delta?: string; message?: string }
+        const value = JSON.parse(data) as { delta?: string; message?: string; redactions?: number }
         if (eventType === 'error') throw new Error(value.message ?? 'The model stream failed.')
+        if (eventType === 'privacy') updateMessage(answerId, message => ({ ...message, redactions: value.redactions ?? 0 }))
         if (value.delta) updateMessage(answerId, (message) => ({ ...message, text: message.text + value.delta }))
       })
     } catch (reason) {
@@ -224,6 +227,7 @@ export default function Assistant() {
         <button aria-pressed={panel === 'chat'} disabled={busy || taskActive} onClick={() => setPanel('chat')}>Ask this page</button>
         <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setTaskGoal(''); setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
         <button aria-pressed={panel === 'local'} disabled={busy || taskActive} onClick={() => setPanel('local')}>Local models</button>
+        <button aria-pressed={panel === 'safety'} disabled={busy || taskActive} onClick={() => { setPanel('safety'); setSettingsOpen(false) }}>Safety</button>
       </nav>}
 
       {panel === 'task' ? (
@@ -239,6 +243,8 @@ export default function Assistant() {
           setPanel('chat')
           setError('')
         }} />
+      ) : panel === 'safety' ? (
+        <SafetyCenter />
       ) : settingsOpen ? (
         <form className="model-settings" onSubmit={saveSettings}>
           <div className="model-settings-title">
@@ -328,6 +334,9 @@ export default function Assistant() {
               <article key={message.id} className={`chat-message ${message.role}`}>
                 <div className="chat-role">{message.role === 'user' ? 'You' : 'Rovuka'}</div>
                 {message.pageTitle && <div className="chat-source">From page: {message.pageTitle}</div>}
+                {message.redactions !== undefined && message.redactions > 0 && <div className="chat-source chat-privacy" role="status">
+                  Privacy shield masked {message.redactions} recognizable secrets before sharing with your model.
+                </div>}
                 {(!message.failure || message.text) && <div className="chat-text">{message.text || (busy && message.role === 'assistant' ? 'Thinking…' : '')}</div>}
                 {message.failure && <div className="chat-recovery">
                   <div role="alert">{message.failure}</div>

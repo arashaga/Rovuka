@@ -344,6 +344,7 @@ pub fn validate_navigation(input: &str) -> anyhow::Result<Url> {
     {
         bail!("The agent can only follow HTTP(S) links without embedded credentials");
     }
+    crate::privacy::validate_outbound(&url)?;
     Ok(url)
 }
 
@@ -418,7 +419,7 @@ fn inline_refs(answer: &str) -> anyhow::Result<Vec<usize>> {
     Ok(references)
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum Status {
     Running,
@@ -428,6 +429,15 @@ pub enum Status {
     Failed,
     NeedsInput,
     NoEvidence,
+}
+
+impl Status {
+    pub fn active(&self) -> bool {
+        matches!(
+            self,
+            Self::Running | Self::AwaitingApproval | Self::NeedsInput
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -790,6 +800,7 @@ pub struct Approval {
 #[serde(rename_all = "camelCase")]
 pub struct TaskView {
     pub id: String,
+    pub started_at: String,
     pub goal: String,
     pub model: String,
     pub status: Status,
@@ -815,6 +826,9 @@ pub struct TaskView {
     pub build: String,
     /// Persistent local diagnostic log, if available.
     pub log_file: Option<String>,
+    pub privacy: crate::privacy::Summary,
+    pub audit_enabled: bool,
+    pub audit_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -825,10 +839,7 @@ pub struct Message {
 
 impl TaskView {
     pub fn active(&self) -> bool {
-        matches!(
-            self.status,
-            Status::Running | Status::AwaitingApproval | Status::NeedsInput
-        )
+        self.status.active()
     }
 }
 
@@ -866,15 +877,48 @@ struct Task {
 #[derive(Default)]
 pub struct Service {
     task: Mutex<Option<Task>>,
+    audit: Option<Arc<crate::audit::Store>>,
 }
 
 impl Service {
+    pub fn new(audit: Arc<crate::audit::Store>) -> Self {
+        Self {
+            task: Mutex::new(None),
+            audit: Some(audit),
+        }
+    }
+
+    pub fn audit_store(&self) -> anyhow::Result<Arc<crate::audit::Store>> {
+        self.audit
+            .clone()
+            .context("Task audit storage is unavailable")
+    }
+
+    pub fn clear_audit(&self) -> anyhow::Result<()> {
+        let task = self.task.lock().expect("agent lock poisoned");
+        if task.as_ref().is_some_and(|task| task.view.active()) {
+            bail!("Stop the active task before deleting audit history");
+        }
+        self.audit
+            .as_ref()
+            .context("Task audit storage is unavailable")?
+            .clear()
+    }
+
     pub fn view(&self) -> Option<TaskView> {
         self.task
             .lock()
             .expect("agent lock poisoned")
             .as_ref()
             .map(|task| task.view.clone())
+    }
+
+    pub fn task_active(&self, id: &str) -> bool {
+        self.task
+            .lock()
+            .expect("agent lock poisoned")
+            .as_ref()
+            .is_some_and(|task| task.view.id == id && task.view.active())
     }
 
     pub fn start(
@@ -889,10 +933,16 @@ impl Service {
         if state.as_ref().is_some_and(|task| task.view.active()) {
             bail!("A task is already active. Stop it before starting another.");
         }
+        if let Some(key) = &key {
+            crate::privacy::remember_secret(key);
+        }
+        let clean = crate::privacy::redact(&goal);
+        let goal = clean.text;
         let id = super::server::random_token();
         let (stop, mut rx) = watch::channel(false);
         let view = TaskView {
             id: id.clone(),
+            started_at: chrono::Utc::now().to_rfc3339(),
             goal: goal.clone(),
             model: settings.model.clone(),
             status: Status::Running,
@@ -919,7 +969,16 @@ impl Service {
             compare_options,
             build: crate::diagnostics::build(),
             log_file: crate::diagnostics::log_path(),
+            privacy: crate::privacy::Summary {
+                redactions: clean.count,
+                blocked_links: 0,
+            },
+            audit_enabled: self.audit.is_some(),
+            audit_error: None,
         };
+        if let Some(audit) = &self.audit {
+            audit.write(&view)?;
+        }
         tracing::info!(
             task = short_id(&id),
             model = %settings.model,
@@ -981,6 +1040,27 @@ impl Service {
             let (steps, events) = (task.view.steps.len(), task.view.permission_events.len());
             change(task);
             log_task_changes(&task.view, steps, events);
+            self.persist(task);
+        }
+    }
+
+    fn persist(&self, task: &mut Task) {
+        if let Some(audit) = &self.audit
+            && let Err(error) = audit.write(&task.view)
+        {
+            let message = format!(
+                "The local task audit could not be saved: {error:#}. The task was stopped."
+            );
+            tracing::error!(task = short_id(&task.view.id), "{message}");
+            task.view.audit_error = Some(message.clone());
+            task.view.error = Some(message);
+            task.view.status = Status::Failed;
+            task.view.pending = None;
+            task.view.question_id = None;
+            task.approval = None;
+            task.reply = None;
+            task.view.research_permission = ResearchPermission::AskEach;
+            task.stop.send_replace(true);
         }
     }
 
@@ -1011,9 +1091,6 @@ impl Service {
             .approval
             .take()
             .context("This approval was already handled")?;
-        sender
-            .send(allow)
-            .map_err(|_| anyhow::anyhow!("The task is no longer waiting for approval"))?;
         let url = task
             .view
             .pending
@@ -1036,6 +1113,13 @@ impl Service {
         task.view.pending = None;
         task.view.status = Status::Running;
         log_task_changes(&task.view, task.view.steps.len(), events);
+        self.persist(task);
+        if let Some(error) = &task.view.audit_error {
+            bail!("{error}");
+        }
+        sender
+            .send(allow)
+            .map_err(|_| anyhow::anyhow!("The task is no longer waiting for approval"))?;
         Ok(())
     }
 
@@ -1052,6 +1136,7 @@ impl Service {
             None,
         ));
         log_task_changes(&task.view, task.view.steps.len(), events);
+        self.persist(task);
         Ok(())
     }
 
@@ -1078,6 +1163,7 @@ impl Service {
                 .steps
                 .push("Stopped. You have control of the tab.".into());
             log_task_changes(&task.view, steps, events);
+            self.persist(task);
         }
         Ok(())
     }
@@ -1086,6 +1172,7 @@ impl Service {
         if message.trim().is_empty() || message.len() > 5000 {
             bail!("Enter a reply containing 1-5,000 bytes");
         }
+        let clean = crate::privacy::redact(message.trim());
         let mut state = self.task.lock().expect("agent lock poisoned");
         let task = state
             .as_mut()
@@ -1095,15 +1182,15 @@ impl Service {
                     && task.view.question_id.as_deref() == Some(question_id)
             })
             .context("This question is no longer waiting for a reply")?;
-        task.reply
+        let sender = task
+            .reply
             .take()
-            .context("This question was already answered")?
-            .send(message.trim().to_owned())
-            .map_err(|_| anyhow::anyhow!("The task is no longer waiting for a reply"))?;
+            .context("This question was already answered")?;
         task.view.conversation.push(Message {
             role: "user",
-            content: message.trim().into(),
+            content: clean.text.clone(),
         });
+        task.view.privacy.redactions += clean.count;
         task.view.question_id = None;
         task.view.message = None;
         task.view.status = Status::Running;
@@ -1111,8 +1198,15 @@ impl Service {
         task.view
             .steps
             .push("Received your reply. Continuing the same task.".into());
-        tracing::info!(task = short_id(id), reply = %message.trim(), "User replied to clarification");
+        tracing::info!(task = short_id(id), reply = %clean.text, "User replied to clarification");
         log_task_changes(&task.view, steps, task.view.permission_events.len());
+        self.persist(task);
+        if let Some(error) = &task.view.audit_error {
+            bail!("{error}");
+        }
+        sender
+            .send(clean.text)
+            .map_err(|_| anyhow::anyhow!("The task is no longer waiting for a reply"))?;
         Ok(())
     }
 
@@ -1136,6 +1230,7 @@ impl Service {
         reason: String,
         kind: &'static str,
     ) -> anyhow::Result<bool> {
+        validate_navigation(url)?;
         let (tx, rx) = oneshot::channel();
         let mut automatic = false;
         self.update(id, |task| {
@@ -1165,6 +1260,9 @@ impl Service {
             });
             task.approval = Some(tx);
         });
+        if !self.task_active(id) {
+            bail!("Task stopped before navigation permission could be recorded");
+        }
         if automatic {
             return Ok(true);
         }
@@ -1250,7 +1348,8 @@ impl Service {
                     id,
                     format!("Reading page {} of {MAX_STEPS}", sources.len() + 1),
                 );
-                let observation = cdp::observe(initial.id, &current_url).await?;
+                let mut observation = cdp::observe(initial.id, &current_url).await?;
+                let privacy = crate::privacy::protect_observation(&mut observation);
                 if observation.text.trim().is_empty() {
                     bail!("No readable text was found on the task page");
                 }
@@ -1272,6 +1371,13 @@ impl Service {
                     },
                 });
                 self.update(id, |task| {
+                    task.view.privacy.add(&privacy);
+                    if privacy.redactions > 0 || privacy.blocked_links > 0 {
+                        task.view.steps.push(format!(
+                            "Privacy shield: masked {} recognizable secrets and excluded {} sensitive links before sharing this page.",
+                            privacy.redactions, privacy.blocked_links
+                        ));
+                    }
                     if let Some(search) = task
                         .view
                         .searches
@@ -1302,6 +1408,7 @@ impl Service {
                 .enumerate()
                 .map(|(index, page)| {
                     let mut value = serde_json::to_value(page).expect("observation serializes");
+                    value["url"] = json!(crate::privacy::redact_url(&page.url).text);
                     value["sourceId"] = json!(index + 1);
                     value["sourceKind"] = json!(sources[index].kind);
                     value
@@ -1339,6 +1446,11 @@ impl Service {
                     if text.len() > 32_000 {
                         bail!("Model output exceeded the task decision limit");
                     }
+                }
+                let clean = crate::privacy::redact(&text);
+                text = clean.text;
+                if clean.count > 0 {
+                    self.update(id, |task| task.view.privacy.redactions += clean.count);
                 }
                 tracing::info!(
                     task = short_id(id),
@@ -2291,6 +2403,7 @@ mod tests {
         *service.task.lock().unwrap() = Some(Task {
             view: TaskView {
                 id: "task1".into(),
+                started_at: "2026-10-05T09:00:00Z".into(),
                 goal: "test".into(),
                 model: "test".into(),
                 status: Status::AwaitingApproval,
@@ -2319,6 +2432,9 @@ mod tests {
                 compare_options: false,
                 build: String::new(),
                 log_file: None,
+                privacy: crate::privacy::Summary::default(),
+                audit_enabled: false,
+                audit_error: None,
             },
             stop,
             approval: Some(approve),
