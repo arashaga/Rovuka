@@ -40,6 +40,34 @@ pub fn preparing(id: &str) -> bool {
     AGENT.get().is_some_and(|service| service.preparing(id))
 }
 
+pub fn selected_read_active(permit: &crate::agent::comparison::ReadPermit) -> anyhow::Result<()> {
+    AGENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("The native agent is unavailable"))?
+        .selected_read_active(permit)
+}
+
+pub fn selected_scope_active(id: &str, target: &crate::cdp::ReadTarget) -> anyhow::Result<()> {
+    AGENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("The native agent is unavailable"))?
+        .selected_scope_active(id, target)
+}
+
+pub fn workspace_tab(id: &str) -> anyhow::Result<Option<u32>> {
+    AGENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("The native agent is unavailable"))?
+        .workspace_tab(id)
+}
+
+pub fn attach_workspace_tab(id: &str, tab: u32) -> anyhow::Result<()> {
+    AGENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("The native agent is unavailable"))?
+        .attach_workspace_tab(id, tab)
+}
+
 pub fn claim_operation(
     id: &str,
     approval_id: &str,

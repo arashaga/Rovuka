@@ -96,10 +96,7 @@ impl Record {
             status: task.status.clone(),
             pages_read: task.pages_read,
             searches: task.searches.len(),
-            options: task
-                .report
-                .as_ref()
-                .map_or(0, |report| report.options.len()),
+            options: task.option_count(),
             actions: task
                 .actions
                 .iter()

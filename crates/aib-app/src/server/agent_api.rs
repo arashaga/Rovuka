@@ -12,6 +12,26 @@ pub(super) struct StartRequest {
     compare_options: bool,
     #[serde(default)]
     mode: crate::agent::operator::Mode,
+    #[serde(default)]
+    selected_tabs: Vec<crate::cdp::ReadTarget>,
+    #[serde(default)]
+    preserve_tabs: bool,
+}
+
+pub(super) async fn tabs(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let Some(origin) = api_authorized(&headers, &state) else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    with_cors(
+        match crate::cdp::read_tabs().await {
+            Ok(tabs) => Json(tabs).into_response(),
+            Err(error) => {
+                tracing::warn!("Could not list comparison tabs: {error:#}");
+                api_error(StatusCode::CONFLICT, &error.to_string())
+            }
+        },
+        &origin,
+    )
 }
 
 pub(super) async fn view(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -38,6 +58,22 @@ pub(super) async fn start(
             &origin,
         );
     }
+    let selected_tabs = if matches!(request.start_mode, crate::agent::StartMode::SelectedTabs) {
+        let result = async {
+            let tabs = crate::cdp::read_tabs().await?;
+            crate::agent::comparison::resolve_selection(&request.selected_tabs, &tabs)
+        }
+        .await;
+        match result {
+            Ok(targets) => targets,
+            Err(error) => {
+                tracing::warn!("Selected-tab scope rejected before sharing: {error}");
+                return with_cors(api_error(StatusCode::CONFLICT, &error.to_string()), &origin);
+            }
+        }
+    } else {
+        request.selected_tabs
+    };
     let settings = state
         .settings
         .read()
@@ -57,13 +93,25 @@ pub(super) async fn start(
         } else {
             None
         };
-        state.agent.start(
+        if selected_tabs.is_empty() && !request.preserve_tabs {
+            return state.agent.start(
+                request.goal.trim().into(),
+                settings,
+                key,
+                request.start_mode,
+                request.compare_options,
+                request.mode,
+            );
+        }
+        state.agent.start_scoped(
             request.goal.trim().into(),
             settings,
             key,
             request.start_mode,
             request.compare_options,
             request.mode,
+            selected_tabs,
+            request.preserve_tabs,
         )
     })();
     with_cors(

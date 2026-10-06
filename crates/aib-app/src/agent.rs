@@ -15,6 +15,8 @@ use std::{
 use tokio::sync::{oneshot, watch};
 use url::Url;
 
+#[path = "comparison.rs"]
+pub(crate) mod comparison;
 #[path = "operator.rs"]
 pub(crate) mod operator;
 
@@ -221,6 +223,7 @@ pub enum StartMode {
     #[default]
     WebSearch,
     CurrentPage,
+    SelectedTabs,
 }
 
 fn search_url(query: &str) -> anyhow::Result<String> {
@@ -840,6 +843,10 @@ pub struct TaskView {
     pub verification: crate::verification::Summary,
     pub issue: Option<crate::verification::Issue>,
     pub model_usage: ModelUsage,
+    pub selected_tabs: Vec<cdp::ReadTarget>,
+    pub comparison: Option<comparison::Report>,
+    pub preserve_tabs: bool,
+    pub workspace_tab: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -860,6 +867,17 @@ pub struct Message {
 impl TaskView {
     pub fn active(&self) -> bool {
         self.status.active()
+    }
+
+    pub fn option_count(&self) -> usize {
+        self.comparison.as_ref().map_or_else(
+            || {
+                self.report
+                    .as_ref()
+                    .map_or(0, |report| report.options.len())
+            },
+            |report| report.rows.len(),
+        )
     }
 }
 
@@ -971,6 +989,21 @@ impl Service {
             .clone()
     }
 
+    fn source_kind(&self, url: &str) -> &'static str {
+        if Url::parse(url)
+            .is_ok_and(|url| url.host_str() == Some("www.google.com") && url.path() == "/search")
+            || self.view().is_some_and(|task| {
+                task.searches
+                    .iter()
+                    .any(|search| search.vertical == "web" && search.url == url)
+            })
+        {
+            "search"
+        } else {
+            "page"
+        }
+    }
+
     pub fn start(
         self: &Arc<Self>,
         goal: String,
@@ -980,6 +1013,29 @@ impl Service {
         compare_options: bool,
         mode: operator::Mode,
     ) -> anyhow::Result<TaskView> {
+        self.start_scoped(
+            goal,
+            settings,
+            key,
+            start_mode,
+            compare_options,
+            mode,
+            vec![],
+            false,
+        )
+    }
+
+    pub fn start_scoped(
+        self: &Arc<Self>,
+        goal: String,
+        settings: ModelSettings,
+        key: Option<String>,
+        start_mode: StartMode,
+        compare_options: bool,
+        mode: operator::Mode,
+        selected_tabs: Vec<cdp::ReadTarget>,
+        preserve_tabs: bool,
+    ) -> anyhow::Result<TaskView> {
         let mut state = self.task.lock().expect("agent lock poisoned");
         if state.as_ref().is_some_and(|task| task.view.active()) {
             bail!("A task is already active. Stop it before starting another.");
@@ -987,6 +1043,7 @@ impl Service {
         if mode == operator::Mode::Prepare && !matches!(start_mode, StartMode::CurrentPage) {
             bail!("Preparation must start on the current public webpage");
         }
+        comparison::validate_scope(start_mode, mode, &selected_tabs, preserve_tabs)?;
         if mode == operator::Mode::Prepare
             && let Some(previous) = state.as_ref().filter(|task| {
                 task.view.mode == operator::Mode::Research && task.view.status == Status::Completed
@@ -1007,7 +1064,9 @@ impl Service {
             goal: goal.clone(),
             model: settings.model.clone(),
             status: Status::Running,
-            steps: vec![if mode == operator::Mode::Prepare {
+            steps: vec![if matches!(start_mode, StartMode::SelectedTabs) {
+                "Starting read-only selected-tab comparison. Only the explicitly selected, unchanged pages can be shared."
+            } else if mode == operator::Mode::Prepare {
                 "Starting opt-in public search preparation. Review one action or approve all supported actions for this task."
             } else {
                 "Starting a bounded reader task"
@@ -1047,6 +1106,10 @@ impl Service {
             verification: crate::verification::Summary::default(),
             issue: None,
             model_usage: ModelUsage::default(),
+            selected_tabs,
+            comparison: None,
+            preserve_tabs,
+            workspace_tab: None,
         };
         if let Some(audit) = &self.audit {
             audit.write(&view)?;
@@ -1076,6 +1139,8 @@ impl Service {
                 result = tokio::time::timeout(Duration::from_secs(600), async {
                     if mode == operator::Mode::Prepare {
                         operator::run(&service, &id, &goal, &settings, key.as_deref()).await
+                    } else if matches!(start_mode, StartMode::SelectedTabs) {
+                        comparison::run(&service, &id, &goal, &settings, key.as_deref()).await
                     } else {
                         service.run(&id, &goal, &settings, key.as_deref(), start_mode).await
                     }
@@ -1104,7 +1169,7 @@ impl Service {
                     task = short_id(&id),
                     status = ?view.status,
                     pages = view.pages_read,
-                    options = view.report.as_ref().map_or(0, |report| report.options.len()),
+                    options = view.option_count(),
                     "Task finished"
                 );
             }
@@ -1238,6 +1303,16 @@ impl Service {
         {
             bail!("Stale or mismatched navigation approval");
         }
+        let selected_read = task
+            .view
+            .pending
+            .as_ref()
+            .is_some_and(|approval| approval.kind == "readTab");
+        if selected_read && allow_all_research {
+            bail!(
+                "Navigation-only research permission cannot authorize selected-tab reads; use Approve all for this task"
+            );
+        }
         let operation = if task
             .view
             .pending
@@ -1267,13 +1342,20 @@ impl Service {
         let events = task.view.permission_events.len();
         if approve_all {
             task.view.task_permission = TaskPermission::AllSupported;
-            if task.view.mode == operator::Mode::Research {
+            if task.view.mode == operator::Mode::Research && !selected_read {
                 task.view.research_permission = ResearchPermission::AllResearch;
             }
-            task.view.permission_events.push(PermissionEvent::task(
-                "User approved all supported actions for this task only",
-                url.clone(),
-            ));
+            task.view.permission_events.push(if selected_read {
+                PermissionEvent::selected_read(
+                    "User approved all selected-page reads for this comparison task only",
+                    url.clone(),
+                )
+            } else {
+                PermissionEvent::task(
+                    "User approved all supported actions for this task only",
+                    url.clone(),
+                )
+            });
         }
         if allow_all_research {
             task.view.research_permission = ResearchPermission::AllResearch;
@@ -1283,6 +1365,12 @@ impl Service {
                 "User approved one exact page action"
             } else {
                 "User declined page action"
+            }
+        } else if selected_read {
+            if allow {
+                "User approved one exact selected-page read"
+            } else {
+                "User declined selected-page read"
             }
         } else {
             if !allow {
@@ -1295,6 +1383,8 @@ impl Service {
         };
         task.view.permission_events.push(if operation.is_some() {
             PermissionEvent::operation(decision, url)
+        } else if selected_read {
+            PermissionEvent::selected_read(decision, url)
         } else {
             PermissionEvent::new(decision, url)
         });
@@ -1568,7 +1658,14 @@ impl Service {
     ) -> anyhow::Result<()> {
         let task_started_at = aib_models::temporal_context()?;
         let schema = crate::protocol::decision_schema();
-        let initial = cdp::inspect(None).await?;
+        let preserve_tabs = self
+            .view()
+            .is_some_and(|task| task.id == id && task.preserve_tabs);
+        let initial = if preserve_tabs {
+            cdp::workspace(id).await?
+        } else {
+            cdp::inspect(None).await?
+        };
         if matches!(start_mode, StartMode::CurrentPage) {
             validate_navigation(&initial.url)?;
         }
@@ -1604,18 +1701,7 @@ impl Service {
                     id: sources.len() + 1,
                     url: observation.url.clone(),
                     title: observation.title.clone(),
-                    kind: if Url::parse(&observation.url).is_ok_and(|url| {
-                        url.host_str() == Some("www.google.com") && url.path() == "/search"
-                    }) || self.view().is_some_and(|task| {
-                        // Web searches are leads; flight/hotel results carry date-specific prices.
-                        task.searches
-                            .iter()
-                            .any(|search| search.vertical == "web" && search.url == observation.url)
-                    }) {
-                        "search".into()
-                    } else {
-                        "page".into()
-                    },
+                    kind: self.source_kind(&observation.url).into(),
                 });
                 self.update(id, |task| {
                     task.view.privacy.add(&privacy);
@@ -2729,6 +2815,10 @@ mod tests {
                 verification: crate::verification::Summary::default(),
                 issue: None,
                 model_usage: ModelUsage::default(),
+                selected_tabs: vec![],
+                comparison: None,
+                preserve_tabs: false,
+                workspace_tab: None,
             },
             stop,
             approval: Some(approve),

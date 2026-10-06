@@ -14,6 +14,8 @@ export function diagnosticReport(task: Task): string {
     task.error && `Error: ${task.error}`,
     task.issue && `Failure category: ${task.issue.category}\nRecovery: ${task.issue.recovery}`,
     `Task permission: ${task.taskPermission}`,
+    task.startMode === 'selectedTabs' ? `Selected read-only tabs: ${task.selectedTabs.length}; comparison sources: ${task.comparison?.rows.length ?? 0}; unknown cells: ${task.comparison?.unknownCells ?? 0}` : null,
+    task.preserveTabs ? `Original tabs preserved; dedicated research tab: ${task.workspaceTab ?? 'not created'}` : null,
     `Independent verification: ${task.verification.verified ? 'passed' : 'not complete'}, ${task.verification.checks} checks. ${task.verification.detail}`,
     `Model requests: ${task.modelUsage.requests}; quarantined-reader requests: ${task.modelUsage.readerRequests}; latency: ${task.modelUsage.elapsedMs}ms; repairs: ${task.modelUsage.repairs}`,
     task.message && `Message: ${task.message}`,

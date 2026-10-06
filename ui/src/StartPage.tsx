@@ -92,8 +92,8 @@ export default function StartPage() {
     <div className="start-shell">
       <section className="start-updates" aria-label="What's new">
         <div className="start-update-label"><span className="start-update-dot" />What's new</div>
-        <div className="start-update-copy"><strong>Your task. One approval, or one step at a time.</strong>
-          <span>Task-wide approval · Independently checked results · Model capability checks</span>
+        <div className="start-update-copy"><strong>Your tabs. One clear comparison.</strong>
+          <span>Selected-tab comparisons · Research in a new tab · Approve all or step by step</span>
         </div>
         <button onClick={() => open('safety')}>Explore Safety <Icon name="arrow" /></button>
       </section>

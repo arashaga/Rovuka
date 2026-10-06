@@ -2,7 +2,7 @@
 
 An AI-first, local-first task browser built on Chromium (CEF) with a Rust host and a React/TypeScript chrome UI.
 
-> Status: **Phase 5 reliability + task-wide approval**. Model studio, page Q&A, source-grounded research, privacy/audit and opt-in public search preparation work. Choose one-action approval or **Approve all for this task**; every supported action still gets native checks and a fresh audited permit. A Reliability workspace measures selected-model protocol capabilities. General website automation, bookings/payments, production sandboxing, bundled inference and installers are not shipped yet.
+> Status: **Phase 6 multi-tab intelligence and research workspace**. Compare 2-6 explicitly selected tabs using source-checked quotations and Unknown cells, or research in one new tab without replacing your originals. Model studio, page Q&A, privacy/audit, Reliability and public search preparation remain available. Choose one-action approval or **Approve all for this task**; supported operations still need fresh native checks and audited permits. General website automation, bookings/payments, production sandboxing, bundled inference and installers are not shipped yet.
 
 Porting guidance is maintained in the local [Mac OS parity](mac-os-parity.md)
 guide, which is intentionally Git-ignored. Copy it separately when moving to
@@ -95,8 +95,8 @@ tab, not a token-bearing website in tab history. Its authenticated UI URL stays
 out of the omnibox, tab snapshots and model-facing observations. Page Q&A
 explicitly refuses to share it: open a real webpage first. Themes, responsive
 320px layouts, focusable controls and reduced-motion artwork use the existing
-Clawpilot design. What's new introduces task-wide approval, independently
-checked search results and selected-model capability checks. Runtimes,
+Clawpilot design. What's new introduces selected-tab comparisons, research in a
+new tab and task-wide or step-by-step approval. Runtimes,
 booking/non-search submission automation and installers are still not bundled.
 
 ## Ordinary browsing and navigation errors
@@ -209,7 +209,7 @@ This does not provide verified live availability or prices.
 
 1. Open the browser and wait for the active tab to finish loading.
 2. Open **Ask AI → Task mode**. Use a model configured in settings or Local models.
-3. Choose **Search the web** (the default) for a new research goal. It does not
+3. Choose **Search the web in this tab** (the default) for a new research goal. It does not
    read/share the starting tab, so Example Domain is not used as travel evidence.
    Choose **Research the current page** only when that page is relevant.
    Enter a focused goal with the details needed to research it.
@@ -232,6 +232,94 @@ This does not provide verified live availability or prices.
 8. **Searches performed** shows each approved query and whether its page was
    actually read. An accepted final answer opens the full-width **Research
    workspace** automatically; it does not leave the final result on Google.
+
+### Phase 6: selected tabs and preserved research
+
+**Compare selected tabs (read-only)** compares pages you have already opened,
+without activating, navigating, filling or clicking them. Nothing is selected
+automatically. The native scope freezes the tab IDs, exact URLs and document
+versions for 2-6 tabs; at least two distinct pages are required. Duplicate URLs
+and fragment copies count as one source. Failed/loading pages, the trusted start
+page and recognizable account, transaction or credential-bearing URLs cannot
+be selected. Signed-in cookies still apply; this is not a private cookie profile
+or exhaustive sensitive-page detector.
+
+After explicit sharing consent, choose **Approve this page read** for one page
+or **Approve all for this task** for the remaining selected scope. Refreshing
+the list or changing selection resets consent. Approve-all cannot expand the
+scope, navigate a selected tab or authorize transactions. **Ask before each
+page read** revokes future automatic reads; **Stop / take over** cancels local pending
+work. Neither can undo text already shared with your configured provider or
+guarantee cancellation of remote inference/billing.
+
+Snapshots use only fixed native read methods in an isolated world. They capture
+bounded readable main-document text, not private form values or all hidden,
+iframe, image or PDF content. Quarantined no-tools evidence readers run at
+**concurrency two**; comparison synthesis receives only source-checked quotes,
+not raw page prose, unrelated tabs or their content. Every cell must be an exact
+normalized quote found in both its protected source snapshot and checked
+evidence, or **Unknown**. Missing details are not estimated, calculated, treated
+as free or silently filled from another source. A malformed comparison gets at
+most one correction; reader failure prevents partial publication. An all-Unknown
+table is **No verified result**, with the unknowns still available to inspect.
+
+The full-width research workspace keeps your question, comparison table,
+captured-source links and activity trail. **Copy comparison with sources**
+includes citations and caveats; clipboard denial offers visible manual copying.
+Sources open in new tabs, and **View findings** restores the existing result
+without another model call. Beginning public-search preparation also retains a
+completed comparison.
+
+**Important limits:** native checks establish quote membership and source
+identity, not semantic correctness. Criterion selection and quote placement
+remain model judgments; search snippets remain leads, not provider-confirmed
+facts. Dates, prices, fees and availability may change. Snapshots must stay on
+the same document through publication; this does not freeze live in-page data
+or independently verify offers. The displayed timestamp is the snapshot-run
+start. Each page needs an additional model reader request; endpoint fallback
+may require extra HTTP attempts. Model time sums settled request durations,
+including provider errors, not parallel wall-clock completion time. Cancelled
+unfinished requests may have no recorded duration. Results are session-only,
+not browser memory.
+
+To research across sites without replacing existing pages, select **Search the
+web in a new research tab**. This creates one ordinary task tab and reuses the
+existing approved search/link loop, six-page and ten-minute limits and
+transaction restrictions. Originals are not read or replaced. Stop/completion
+release the task lease and leave the research tab for manual review. This is
+bounded multi-site research, not unrestricted parallel browsing; selected-page
+comparisons create no worker tabs. The existing same-tab search remains default.
+
+#### Try Phase 6
+
+1. Launch `.\target\debug\rovuka.exe` and configure a model in **Connect your
+   model** if needed. Ordinary browsing does not need a model.
+2. Open these two public pages in separate tabs:
+   `https://en.wikipedia.org/wiki/Rust_(programming_language)` and
+   `https://en.wikipedia.org/wiki/Python_(programming_language)`.
+   Wait for each to display readable text.
+3. Open **Ask AI → Task mode**. Keep **Research only**, then choose
+   **Compare selected tabs (read-only)**.
+4. Check only those two pages. Paste:
+   **Compare these pages on typing style, memory management and intended uses.
+   Quote each page for factual claims. Leave details not established by that
+   page Unknown. Do not browse or perform any actions.**
+5. Check **Allow sharing only my selected pages with my selected model** and
+   choose **Start task**, then **Approve all for this task**.
+6. Expect two rows, source-checked quotes or explicit Unknowns and source
+   buttons. Neither original tab should change. Open a source; it must open a
+   new tab. Return through **Task mode → View findings** to see the same table.
+7. For the second feature, choose **New task**, select **Search the web in a new
+   research tab**, and ask: **Compare Notion, Obsidian and OneNote for offline
+   solo project planning. Use official sources, mark unknown pricing, and do
+   not sign in or buy anything.** Grant sharing consent and approve navigation
+   individually or task-wide. Originals stay open; the new task tab visits
+   only the bounded approved sources.
+
+These are manual provider tests, not a promise of a particular live-model
+answer. If a page reloads/closes, the run stops rather than combining stale
+documents; refresh your selections and provide fresh consent. Unreadable pages
+or unsupported model output produce an explicit failure/evidence gap.
 
 ### Conversation layout and date awareness
 
@@ -961,6 +1049,20 @@ For a focused, loopback-only safety run after building:
 node .\scripts\test-agent.cjs --safety-only
 ```
 
+For scoped selected-tab, comparison and preserved-research regression coverage:
+
+```powershell
+node .\scripts\test-agent.cjs --multitab-only
+```
+
+This uses synthetic public pages and a local mock model, never real provider
+credentials. It checks frozen scope/consent, reader concurrency two, unchanged
+originals and private fields, explicit Unknown cells, citations/copy, 320px
+themes, duplicates, reload/close, Stop/revoke, bounded protocol correction,
+all-Unknown evidence gaps and the new research tab's lease cleanup. The full
+suite includes these groups. Windows CI runs this focused suite after the
+repeated native evaluations; only metadata evaluation JSON is uploaded.
+
 The full suite includes 12 operator groups: opt-in draft handoff, exact reviews,
 native dates/filters/scroll/GET parameters, retained findings, injected or
 transactional proposal rejection, stale nodes/values/documents, trusted manual
@@ -1049,17 +1151,19 @@ show either actual website content or a visible native failure, retaining the
 address. It does not solve site challenges, change settings or certify booking
 support. All browsers use disposable profiles and close normally.
 
-Current Windows verification: **102 workspace Rust tests and all 137 native
-regression groups pass**, preserving all 136 preceding groups and adding trusted
-approve-all/preselected-form recovery coverage. Page click/keyboard/scroll
-takeover reasons, grant expiry and consent-reset stopped-task retry are checked
-in the native UI. The suite retains the eight reliability task cases, three
-evaluation/API/UI groups and repeated-question protection. A separate Phase 5
-two-repeat evaluation passes **16/16 native task
-cases and all six mock model-protocol checks**, including wrong-query and
-wrong-displayed-result failures, Stop and both 320px themes. UI type-check,
-production UI build, standard native build, formatting and normal zero-exit
-CEF/server shutdown pass.
+Current Windows verification: **111 workspace Rust tests and all 150 native
+regression groups pass**, preserving all 137 preceding groups and adding 13
+scoped multi-tab, comparison and preserved-research groups. These cover trusted
+selection/approval, exact two-reader concurrency, unselected/form privacy,
+source-checked/Unknown cells, reload/close, revoke/Stop, failed synthesis latency,
+bounded correction, copy denial, retained findings and one-tab lease cleanup.
+Existing ordinary navigation, hotel preparation, task-wide approval, manual
+takeover, narrow themes, privacy/audit and shutdown checks remain passing.
+A separate two-repeat evaluation passes **16/16 native task cases and all six
+mock model-protocol checks**, including wrong-query and wrong-displayed-result
+failures, Stop and both 320px themes. UI type-check, production UI build, standard
+native build, formatting and editor diagnostics also pass. Fixture UI transitions
+and live-activity checks use explicit synchronization, not fixed delay guesses.
 
 The actual native live-hotel test followed bare `hotel.com` to secure Hotels.com
 and completed the natural Cancun request with **one human task-wide approval,
@@ -1080,8 +1184,9 @@ is required to continue under the task grant.
 The earlier separate model-free live-browsing smoke displayed example.com and
 the Hotels.com homepage; **explicit** `https://hotel.com/` retained its honest
 connection-refused error without a downgrade. These fixtures do not certify
-live model accuracy or macOS readiness; the new GitHub workflow has not yet
-been run remotely.
+live model accuracy or macOS readiness. Windows CI independently runs the
+relative-date mock/native evaluations and scoped multi-tab fixtures; it never
+uses personal models, profiles or credentials.
 
 It also checks comparison-format correction, observed direct destinations,
 invented-link rejection, scoped grants/revocation/expiry, page bounds, native

@@ -14,6 +14,44 @@ use tokio::sync::oneshot;
 
 pub type Reply = oneshot::Sender<anyhow::Result<JsonValue>>;
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadTarget {
+    pub id: u32,
+    pub url: String,
+    pub title: String,
+    pub document_epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadTab {
+    pub target: ReadTarget,
+    pub unavailable: Option<String>,
+}
+
+pub enum SnapshotStep {
+    FrameTree,
+    World { frame_id: String },
+    Read { context_id: i64 },
+}
+
+impl SnapshotStep {
+    pub fn request(self) -> (&'static str, JsonValue) {
+        match self {
+            Self::FrameTree => ("Page.getFrameTree", json!({})),
+            Self::World { frame_id } => (
+                "Page.createIsolatedWorld",
+                json!({"frameId":frame_id,"worldName":"aib-comparison-reader"}),
+            ),
+            Self::Read { context_id } => (
+                "Runtime.evaluate",
+                json!({"expression":include_str!("perception.js"),"contextId":context_id,"returnByValue":true}),
+            ),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PageLoading;
 impl std::fmt::Display for PageLoading {
@@ -34,6 +72,24 @@ impl std::fmt::Display for PageMoved {
 impl std::error::Error for PageMoved {}
 
 pub enum HostRequest {
+    ReadTabs {
+        reply: Reply,
+    },
+    Snapshot {
+        id: i32,
+        permit: crate::agent::comparison::ReadPermit,
+        step: SnapshotStep,
+        reply: Reply,
+    },
+    ValidateSelected {
+        task_id: String,
+        target: ReadTarget,
+        reply: Reply,
+    },
+    Workspace {
+        task_id: String,
+        reply: Reply,
+    },
     Inspect {
         tab_id: Option<u32>,
         reply: Reply,
@@ -289,6 +345,98 @@ pub async fn observe(tab_id: u32, expected_url: &str) -> anyhow::Result<Observat
     })
     .await
     .context("The approved page did not settle for reading within 30 seconds")?
+}
+
+pub async fn read_tabs() -> anyhow::Result<Vec<ReadTab>> {
+    let (reply, rx) = oneshot::channel();
+    crate::bus::send_agent(HostRequest::ReadTabs { reply });
+    serde_json::from_value(receive(rx).await?).context("Invalid native selected-tab listing")
+}
+
+pub async fn validate_selected(task_id: &str, target: &ReadTarget) -> anyhow::Result<()> {
+    let (reply, rx) = oneshot::channel();
+    crate::bus::send_agent(HostRequest::ValidateSelected {
+        task_id: task_id.into(),
+        target: target.clone(),
+        reply,
+    });
+    receive(rx).await?;
+    Ok(())
+}
+
+async fn snapshot_call(
+    permit: &crate::agent::comparison::ReadPermit,
+    step: SnapshotStep,
+) -> anyhow::Result<JsonValue> {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let _cleanup = Cleanup(id);
+    let (reply, rx) = oneshot::channel();
+    crate::bus::send_agent(HostRequest::Snapshot {
+        id,
+        permit: permit.clone(),
+        step,
+        reply,
+    });
+    let result = receive(rx).await?;
+    crate::bus::selected_read_active(permit)?;
+    Ok(result)
+}
+
+pub async fn snapshot(
+    permit: &crate::agent::comparison::ReadPermit,
+) -> anyhow::Result<Observation> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let tree = snapshot_call(permit, SnapshotStep::FrameTree).await?;
+        let frame_id = tree
+            .pointer("/frameTree/frame/id")
+            .and_then(JsonValue::as_str)
+            .context("The selected page frame is unavailable")?;
+        let world = snapshot_call(
+            permit,
+            SnapshotStep::World { frame_id: frame_id.into() },
+        ).await?;
+        let context_id = world.get("executionContextId")
+            .and_then(JsonValue::as_i64)
+            .context("The selected page reader context is unavailable")?;
+        let result = snapshot_call(permit, SnapshotStep::Read { context_id }).await?;
+        if result.get("exceptionDetails").is_some() {
+            bail!("The selected page reader could not inspect this document");
+        }
+        let mut value = result.pointer("/result/value")
+            .context("The selected page reader returned no observation")?.clone();
+        value["tabId"] = json!(permit.target.id);
+        let page: Observation = serde_json::from_value(value)
+            .context("Invalid selected-page observation")?;
+        validate_selected(&permit.task_id, &permit.target).await?;
+        if page.url != permit.target.url {
+            bail!("A selected page changed during reading. Refresh the tab selection and start a fresh task.");
+        }
+        Ok(page)
+    }).await.context("The selected page reader exceeded its 30-second limit")?
+}
+
+pub async fn workspace(task_id: &str) -> anyhow::Result<aib_ipc::TabInfo> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let (reply, rx) = oneshot::channel();
+            crate::bus::send_agent(HostRequest::Workspace {
+                task_id: task_id.into(),
+                reply,
+            });
+            match receive(rx).await {
+                Ok(value) => {
+                    return serde_json::from_value(value)
+                        .context("Invalid native research-workspace tab");
+                }
+                Err(error) if error.is::<PageLoading>() => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await
+    .context("The new research tab did not become ready within 30 seconds")?
 }
 
 /// Waits for three settled samples and returns the settled URL. Only moves the native guard

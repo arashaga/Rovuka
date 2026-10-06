@@ -1,0 +1,46 @@
+.tab-selection {
+  margin: 8px 0;
+  padding: 12px;
+  min-width: 0;
+  border: 1px solid var(--cp-border);
+  border-radius: 10px;
+  background: var(--cp-surface-soft);
+}
+.tab-selection legend { color: var(--cp-text); font-weight: 600; font-size: 12px; }
+.tab-selection p { color: var(--cp-text-muted); font-size: 12px; line-height: 1.6; }
+.tab-selection-list { display: grid; gap: 8px; margin: 12px 0; max-height: 320px; overflow-y: auto; }
+.tab-selection-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-surface); cursor: pointer; }
+.tab-selection-item input { flex: 0 0 auto; margin: 4px 0 0; accent-color: var(--cp-accent); }
+.tab-selection-item span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.tab-selection-item strong { color: var(--cp-text); font-size: 12px; }
+.tab-selection-item small { color: var(--cp-text-muted); font-size: 11px; line-height: 1.5; }
+.tab-selection-item.is-unavailable { cursor: default; }
+.tab-selection-count { color: var(--cp-accent); }
+.selected-scope { margin: 12px 0; padding: 12px; border: 1px solid var(--cp-border); border-radius: 10px; font-size: 12px; overflow-wrap: anywhere; }
+.selected-scope ul { margin: 8px 0; padding-left: 20px; }
+.selected-scope li { margin: 4px 0; color: var(--cp-text-muted); }
+.comparison-results { min-width: 0; }
+.comparison-results > p, .comparison-caveat { color: var(--cp-text-muted); font-size: 13px; line-height: 1.7; }
+.comparison-metadata { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 12px 0; color: var(--cp-text-muted); font-size: 12px; }
+.comparison-scroll { max-width: 100%; overflow: auto; border: 1px solid var(--cp-border); border-radius: 16px; background: var(--cp-surface); }
+.comparison-scroll:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 4px; }
+.comparison-table { border-collapse: collapse; width: 100%; color: var(--cp-text); font-size: 13px; }
+.comparison-table caption { padding: 12px; text-align: left; color: var(--cp-text-muted); background: var(--cp-surface-soft); font-size: 12px; line-height: 1.6; }
+.comparison-table th, .comparison-table td { padding: 16px; border-bottom: 1px solid var(--cp-border); border-right: 1px solid var(--cp-border); text-align: left; vertical-align: top; min-width: 180px; max-width: 320px; overflow-wrap: anywhere; line-height: 1.7; }
+.comparison-table thead th { background: var(--cp-surface-soft); font-weight: 600; }
+.comparison-table tbody th { min-width: 160px; background: var(--cp-bg-elevated); }
+.comparison-table tr:last-child > * { border-bottom: 0; }
+.comparison-table tr > :last-child { border-right: 0; }
+.comparison-source, .comparison-citation { border: 0; background: var(--cp-surface); color: var(--cp-link); text-align: left; cursor: pointer; font: inherit; padding: 4px 0; overflow-wrap: anywhere; }
+.comparison-source { background: var(--cp-bg-elevated); font-weight: 600; }
+.comparison-citation { display: block; margin-top: 8px; font-size: 12px; }
+.comparison-source:hover, .comparison-citation:hover { text-decoration: underline; }
+.comparison-unknown { display: grid; gap: 4px; color: var(--cp-text-muted); font-weight: 600; }
+.comparison-unknown span { font-weight: 400; font-size: 12px; }
+.comparison-caveat { padding: 16px; margin: 16px 0; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-surface-soft); }
+.comparison-copy textarea { box-sizing: border-box; width: 100%; border: 1px solid var(--cp-border); border-radius: 10px; padding: 12px; background: var(--cp-surface); color: var(--cp-text); }
+@media (max-width: 480px) {
+  .comparison-results .findings-section-heading { display: grid; gap: 8px; }
+  .comparison-table th, .comparison-table td { min-width: 160px; padding: 12px; }
+  .comparison-metadata { display: grid; gap: 8px; }
+}

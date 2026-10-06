@@ -18,7 +18,11 @@ pub enum TaskPermission {
 
 impl TaskPermission {
     pub fn allows(self, kind: &str) -> bool {
-        self == Self::AllSupported && matches!(kind, "search" | "link" | "redirect" | "operation")
+        self == Self::AllSupported
+            && matches!(
+                kind,
+                "search" | "link" | "redirect" | "operation" | "readTab"
+            )
     }
 }
 
@@ -106,6 +110,12 @@ pub struct PermissionEvent {
 }
 
 impl PermissionEvent {
+    pub fn selected_read(decision: &str, url: Option<String>) -> Self {
+        let mut event = Self::new(decision, url);
+        event.scope = "This comparison task: read only explicitly selected, unchanged page snapshots; no navigation, page changes or access to other tabs".into();
+        event
+    }
+
     pub fn task(decision: &str, url: Option<String>) -> Self {
         let mut event = Self::new(decision, url);
         event.scope = "This task and tab: validated public research, search fields, filters, widgets and GET searches only; no transactions, messages, uploads or account changes".into();

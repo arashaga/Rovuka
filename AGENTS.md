@@ -76,6 +76,38 @@ storage. CI uses a mock model and relative dates; upload only the bounded result
 JSON, never profiles/settings/logs/screenshots or provider credentials.
 Imports are local/unsigned, not certified or trusted user instructions.
 
+Selected-tab comparisons use `comparison.rs` and a separate fixed native
+snapshot path, not a relaxation of the active-tab navigation/operator guard.
+Freeze 2-6 explicit native tab IDs, exact URLs and document epochs; revalidate
+before reads and publication, and deduplicate URL/fragment copies without
+silently adding sources. Metadata listing is not sharing consent. Refresh,
+selection/mode changes and retry reset consent; recognizable unsafe/loading/
+failed/trusted pages remain unavailable.
+Keep FrameTree/isolated-world/fixed-reader steps ordered, expiring and single-use
+across permit clones, with audited authority checks before dispatch and after
+replies. Revoke must discard unaccepted automatic reads and recover with
+bounded fresh approval, including revocation during permit authorization.
+Stop retires scope and prevents late publication. Legacy navigation-only
+grants cannot authorize selected-page sharing.
+
+Retain original protected snapshots and source-specific checked evidence.
+Readers have no tools and concurrency two; synthesis sees only their checked
+quotes. Align the comparison types, strict schema, instruction, validator and
+UI: one row per source, bounded unique criteria, exact same-source normalized
+quotes or null/Unknown, no invented/calculated values or model URLs. One bounded
+correction only; failed readers never publish a partial table. All-Unknown
+tables are NoEvidence, not completed results or protocol errors. Search snippets
+remain leads. Do not claim semantic fact-checking, live availability, immutable
+page data, isolated cookies or persistent browser memory.
+The optional web-research workspace creates one ordinary task tab, preserves
+unread originals and reuses existing bounds/guards. Stop/completion release its
+lease while leaving it for review; comparisons create no worker tabs.
+Run `--multitab-only` and the full native suite after rebuilding, including
+trusted selection/approval, unselected/form privacy, copy denial, reload/close
+through model latency, revoke/Stop, duplicates, malformed evidence/citations,
+all-Unknowns, retained comparison and 320px light/dark layout. GUI suites must
+run sequentially. CI remains local/mock-only with no private artifacts.
+
 Privacy/audit changes must pass `node .\scripts\test-agent.cjs --safety-only`
 after rebuilding. Native fixtures isolate `AIB_AUDIT_DIR` from the real history.
 Start-page/assistant-shortcut changes must also pass

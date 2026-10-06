@@ -31,6 +31,7 @@ struct Tab {
     info: TabInfo,
     navigation_url: String,
     http_fallback: Option<crate::navigation::PublicHttpFallback>,
+    document_epoch: u64,
 }
 
 struct AgentGuard {
@@ -160,6 +161,7 @@ fn update_window_title() {
 fn begin_navigation(tab: TabId, url: &str) {
     with_state(|s| {
         if let Some(tab) = s.tabs.iter_mut().find(|item| item.id == tab) {
+            tab.document_epoch += 1;
             tab.navigation_url = url.to_owned();
             if tab.http_fallback.as_ref().is_some_and(|fallback| {
                 url::Url::parse(url)
@@ -182,6 +184,7 @@ fn begin_history_navigation(tab: TabId) {
     // Cached history restoration can skip on_before_browse.
     with_state(|s| {
         if let Some(tab) = s.tabs.iter_mut().find(|item| item.id == tab) {
+            tab.document_epoch += 1;
             tab.navigation_url.clear();
             tab.http_fallback = None;
         }
@@ -212,8 +215,155 @@ fn tab_view(id: TabId) -> Option<BrowserView> {
     with_state(|s| s.tabs.iter().find(|t| t.id == id).map(|t| t.view.clone()))
 }
 
+fn selected_tab_error(tab: &Tab) -> Option<String> {
+    if tab.browser.is_none() || tab.info.loading || tab.info.pending_url.is_some() {
+        return Some("Still loading; refresh the selection when the page is ready.".into());
+    }
+    if tab.info.load_error.is_some() {
+        return Some("This page failed to load; retry it before selecting.".into());
+    }
+    if tab.info.url.is_empty() {
+        return Some("The start page is not shared with your model.".into());
+    }
+    let trusted = UI_URL
+        .get()
+        .and_then(|ui| url::Url::parse(ui).ok())
+        .zip(url::Url::parse(&tab.info.url).ok())
+        .is_some_and(|(ui, target)| ui.origin() == target.origin());
+    if trusted {
+        return Some("The trusted browser UI cannot be a research source.".into());
+    }
+    crate::agent::operator::validate_public_url(&tab.info.url)
+        .err()
+        .map(|error| format!("Not a supported public research page: {error}"))
+}
+
+fn selected_browser(target: &crate::cdp::ReadTarget) -> anyhow::Result<Browser> {
+    with_state(|s| {
+        let tab = s
+            .tabs
+            .iter()
+            .find(|tab| tab.id == target.id)
+            .filter(|_| !s.closing)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "A selected tab was closed. Refresh the selection and start a fresh task."
+                )
+            })?;
+        if tab.document_epoch != target.document_epoch || tab.info.url != target.url {
+            anyhow::bail!(
+                "A selected document changed or reloaded. Refresh the tab selection and start a fresh task."
+            );
+        }
+        if let Some(error) = selected_tab_error(tab) {
+            anyhow::bail!("{error}");
+        }
+        tab.browser
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("The selected browser is unavailable"))
+    })
+}
+
 pub fn handle_agent(request: crate::cdp::HostRequest) {
     use crate::cdp::HostRequest;
+    let request = match request {
+        HostRequest::ReadTabs { reply } => {
+            let tabs = with_state(|s| {
+                s.tabs
+                    .iter()
+                    .map(|tab| {
+                        let unavailable = selected_tab_error(tab);
+                        crate::cdp::ReadTab {
+                            target: crate::cdp::ReadTarget {
+                                id: tab.id,
+                                url: if unavailable.is_some() {
+                                    crate::diagnostics::short_url(&tab.info.url)
+                                } else {
+                                    tab.info.url.clone()
+                                },
+                                title: crate::evidence::safe_label(&tab.info.title)
+                                    .chars()
+                                    .take(200)
+                                    .collect(),
+                                document_epoch: tab.document_epoch,
+                            },
+                            unavailable,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let _ = reply.send(Ok(serde_json::json!(tabs)));
+            return;
+        }
+        HostRequest::Snapshot {
+            id,
+            permit,
+            step,
+            reply,
+        } => {
+            if reply.is_closed() {
+                return;
+            }
+            let result = crate::bus::selected_read_active(&permit)
+                .and_then(|()| permit.claim_step(&step))
+                .and_then(|()| selected_browser(&permit.target));
+            match result {
+                Ok(browser) => {
+                    let (method, params) = step.request();
+                    crate::cdp::dispatch(browser, id, method, params, reply);
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                }
+            }
+            return;
+        }
+        HostRequest::ValidateSelected {
+            task_id,
+            target,
+            reply,
+        } => {
+            let result = crate::bus::selected_scope_active(&task_id, &target)
+                .and_then(|()| selected_browser(&target))
+                .map(|_| serde_json::json!({}));
+            let _ = reply.send(result);
+            return;
+        }
+        HostRequest::Workspace { task_id, reply } => {
+            if reply.is_closed() {
+                return;
+            }
+            let result = (|| {
+                let tab = crate::bus::workspace_tab(&task_id)?;
+                let id = match tab {
+                    Some(id) => id,
+                    None => {
+                        let id = new_tab(None, true)
+                            .ok_or_else(|| anyhow::anyhow!("Could not create the research tab"))?;
+                        crate::bus::attach_workspace_tab(&task_id, id)?;
+                        id
+                    }
+                };
+                with_state(|s| {
+                    let tab = s
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id == id)
+                        .filter(|_| s.active == Some(id) && !s.closing)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("The research tab was closed or you switched tabs")
+                        })?;
+                    if tab.browser.is_none() || tab.info.loading {
+                        return Err(crate::cdp::PageLoading.into());
+                    }
+                    Ok(serde_json::json!(tab.info))
+                })
+            })();
+            let _ = reply.send(result);
+            return;
+        }
+        request => request,
+    };
     if let HostRequest::Cancel { id } = request {
         crate::cdp::cancel(id);
         return;
@@ -257,7 +407,12 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
             expected_url,
             ..
         } => (Some(*tab_id), Some(expected_url.as_str())),
-        HostRequest::Cancel { .. } | HostRequest::End { .. } => unreachable!(),
+        HostRequest::Cancel { .. }
+        | HostRequest::End { .. }
+        | HostRequest::ReadTabs { .. }
+        | HostRequest::Snapshot { .. }
+        | HostRequest::ValidateSelected { .. }
+        | HostRequest::Workspace { .. } => unreachable!(),
     };
     let target = with_state(|s| {
         if s.closing {
@@ -487,7 +642,12 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
             });
             let _ = reply.send(result);
         }
-        HostRequest::Cancel { .. } | HostRequest::End { .. } => unreachable!(),
+        HostRequest::Cancel { .. }
+        | HostRequest::End { .. }
+        | HostRequest::ReadTabs { .. }
+        | HostRequest::Snapshot { .. }
+        | HostRequest::ValidateSelected { .. }
+        | HostRequest::Workspace { .. } => unreachable!(),
     }
 }
 
@@ -751,6 +911,7 @@ fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
             browser: None,
             navigation_url: url.clone(),
             http_fallback: None,
+            document_epoch: 0,
             info: TabInfo {
                 id,
                 url: if url == "about:blank" {
@@ -1531,6 +1692,12 @@ wrap_display_handler! {
             let Some(tab) = browser_id(browser).and_then(tab_id_for_browser) else { return };
             let url = url.map(|u| u.to_string()).unwrap_or_default();
             let url = if url == "about:blank" { String::new() } else { url };
+            with_state(|s| {
+                if let Some(item) = s.tabs.iter_mut().find(|item| item.id == tab)
+                    && item.info.url != url {
+                    item.document_epoch += 1;
+                }
+            });
             // A committed page changing its own URL (pushState/replaceState/fragment) stays on the
             // same origin and loads no new document; keep the task lease on that page.
             with_state(|s| {

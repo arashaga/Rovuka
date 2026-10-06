@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiRequest } from './modelApi.ts'
 import { host } from './ipc.ts'
-import { taskActive as active, type Task, type TaskStatus } from './taskTypes.ts'
+import { taskActive as active, type ReadTarget, type Task, type TaskStatus } from './taskTypes.ts'
+import TabSelection from './TabSelection.tsx'
+import ComparisonResults from './ComparisonResults.tsx'
 import ResearchResults, { SearchTrail } from './ResearchResults.tsx'
 import SafetyNotice from './SafetyNotice.tsx'
 import TaskDiagnostic, { DiagnosticActions } from './TaskDiagnostic.tsx'
@@ -16,7 +18,12 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
   const [goal, setGoal] = useState(initialGoal)
   const [sharePage, setSharePage] = useState(false)
   const [mode, setMode] = useState<'research' | 'prepare'>(initialPrepare ? 'prepare' : 'research')
-  const [startMode, setStartMode] = useState<'webSearch' | 'currentPage'>(initialPrepare ? 'currentPage' : 'webSearch')
+  const [startMode, setStartMode] = useState<'webSearch' | 'currentPage' | 'selectedTabs' | 'newResearchTab'>(initialPrepare ? 'currentPage' : 'webSearch')
+  const [selectedTabs, setSelectedTabs] = useState<ReadTarget[]>([])
+  const selectTabs = useCallback((tabs: ReadTarget[]) => {
+    setSelectedTabs(tabs)
+    setSharePage(false)
+  }, [])
   const [compareOptions, setCompareOptions] = useState(true)
   const [task, setTask] = useState<Task | null>(null)
   const [savedFindings, setSavedFindings] = useState<Task | null>(null)
@@ -180,12 +187,15 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
     host.send({ type: 'setAssistantExpanded', expanded: false })
     setShowSetup(true)
     setShowSavedFindings(false)
+    setSharePage(false)
+    setSelectedTabs([])
     window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('#task-goal')?.focus(), 0)
   }
   const retryTask = () => {
     setGoal(task?.conversation.filter(message => message.role === 'user').map(message => message.content).join('\n') || '')
     setSharePage(false)
     setMode(task?.mode || 'research')
+    setStartMode(task?.preserveTabs ? 'newResearchTab' : task?.startMode || 'webSearch')
     newTask()
   }
   if (expanded && showSavedFindings && savedFindings) {
@@ -213,13 +223,15 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
       {showSetup && <div className="task-intro">
         <span className="local-eyebrow">Intent → evidence → decision</span>
         <h2>Give the web a goal.</h2>
-        <p>Find concrete options with direct links. Travel pairs flights and hotels; shopping compares products. Comparable observed prices sort lowest first.</p>
+        <p>Compare selected tabs with source-checked quotes, or research concrete options with direct links. Use a new research tab to preserve your original pages.</p>
         <span className="local-badge">6 pages max · You control research permissions</span>
         <p className="privacy-note">Research stays read-only. Optional preparation can fill public search fields and filters. Approve each action or approve all supported actions for this task. No bookings or payments. Unsupported website widgets require manual use.</p>
       </div>}
       {showSetup && <form className="task-form" onSubmit={event => {
         event.preventDefault()
-        void send('/api/agent', { goal, sharePage, startMode, compareOptions: mode === 'research' && compareOptions, mode }).then(ok => {
+        void send('/api/agent', { goal, sharePage, startMode: startMode === 'newResearchTab' ? 'webSearch' : startMode,
+          selectedTabs: startMode === 'selectedTabs' ? selectedTabs : [], preserveTabs: startMode === 'newResearchTab',
+          compareOptions: mode === 'research' && startMode !== 'selectedTabs' && compareOptions, mode }).then(ok => {
           if (ok) { setShowSetup(false); if (mode === 'prepare') host.send({ type: 'setAssistantExpanded', expanded: false }) }
         })
       }}>
@@ -229,6 +241,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
           setMode(next)
           setStartMode(next === 'prepare' ? 'currentPage' : 'webSearch')
           setSharePage(false)
+          setSelectedTabs([])
         }}>
           <option value="research">Research only (default)</option>
           <option value="prepare">Prepare public search fields - choose your approval scope</option>
@@ -239,27 +252,40 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
           onChange={event => setGoal(event.target.value)} />
         <label htmlFor="task-start">Starting point</label>
         <select id="task-start" value={startMode} disabled={mode === 'prepare' || active(task) || busy}
-          onChange={event => setStartMode(event.target.value === 'currentPage' ? 'currentPage' : 'webSearch')}>
-          <option value="webSearch">Search the web (recommended)</option>
+          onChange={event => {
+            const value = event.target.value
+            setStartMode(value === 'selectedTabs' || value === 'newResearchTab' || value === 'currentPage' ? value : 'webSearch')
+            setSharePage(false)
+            setSelectedTabs([])
+          }}>
+          <option value="webSearch">Search the web in this tab</option>
+          <option value="newResearchTab">Search the web in a new research tab</option>
           <option value="currentPage">{mode === 'prepare' ? 'Prepare the current public page' : 'Research the current page'}</option>
+          <option value="selectedTabs">Compare selected tabs (read-only)</option>
         </select>
-        {mode === 'research' && <><label htmlFor="task-format">Result format</label>
+        {mode === 'research' && startMode === 'selectedTabs' && <TabSelection disabled={active(task) || busy} onSelect={selectTabs} />}
+        {mode === 'research' && startMode !== 'selectedTabs' && <><label htmlFor="task-format">Result format</label>
         <select id="task-format" value={compareOptions ? 'options' : 'brief'} disabled={active(task) || busy}
           onChange={event => setCompareOptions(event.target.value === 'options')}>
           <option value="options">Actionable options · prices & direct links</option>
           <option value="brief">Research brief / explanation</option>
         </select></>}
         {mode === 'prepare' && <p className="operator-caution">Opt-in operator preview: up to 12 exact actions on this public page and its approved links. Supply literal dates and filter values, for example 2026-11-20 and 2 adults. Hotels.com searches for adults in one room use a reviewed GET shortcut after destination selection, without calendar or guest-picker clicks. Choose individual or task-wide approval; every action is revalidated. Page clicks, typing and scrolling take over and stop preparation. Existing form values are not shared with the model; website scripts can still send entered data. No POST or non-search submissions.</p>}
-        <p className="privacy-note">{startMode === 'webSearch'
+        <p className="privacy-note">{startMode === 'selectedTabs'
+          ? 'Only explicitly selected page snapshots are shared after approval. No tabs are navigated or changed. Reloaded, closed, sensitive and failed pages are rejected. Missing facts stay Unknown.'
+          : startMode === 'newResearchTab'
+          ? 'Creates one new research tab. The original tabs are neither read nor replaced. Approve searches and observed links; the run is bounded to six page reads. Stop leaves the new tab for review.'
+          : startMode === 'webSearch'
           ? 'Plans a search without reading or sharing the starting tab. You approve its query and URL before opening Google; this replaces the page in your active tab.'
           : `Reads ${pageTitle || 'your active webpage'}, not the whole web. Choose Search the web if this page is unrelated.`}
           {' '}Pages read by the task are shared with your selected model. Do not use sensitive pages unless you intend to share them.</p>
         <p className="task-privacy-note">Privacy shield is always on. Recognizable secrets are masked, but detection is not exhaustive. A local audit keeps status, site origins and permissions—not your goal, pages or answers.</p>
         <label className="check-label">
           <input type="checkbox" checked={sharePage} disabled={active(task) || busy} onChange={event => setSharePage(event.target.checked)} />
-          Allow sharing task pages with my selected model
+          {startMode === 'selectedTabs' ? 'Allow sharing only my selected pages with my selected model' : 'Allow sharing task pages with my selected model'}
         </label>
-        <button className="assistant-primary" type="submit" disabled={!ready || !goal.trim() || !sharePage || active(task) || busy}>
+        <button className="assistant-primary" type="submit" disabled={!ready || !goal.trim() || !sharePage || active(task) || busy
+          || (startMode === 'selectedTabs' && selectedTabs.length < 2)}>
           {active(task) ? 'Task in progress' : 'Start task'}
         </button>
       </form>}
@@ -283,11 +309,11 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
               {task.pending && <span className="approval-attention" role="status">Waiting for you — choose an approval below</span>}
             </div>
             {active(task) && (task.taskPermission === 'allSupported' || task.researchPermission === 'allResearch') && <aside className="research-grant" aria-label="Automatic task permission">
-              <strong>Automatic {task.mode === 'prepare' ? 'preparation' : 'research'} · This task only</strong>
+              <strong>Automatic {task.startMode === 'selectedTabs' ? 'selected-page reads' : task.mode === 'prepare' ? 'preparation' : 'research'} · This task only</strong>
               <button className="assistant-secondary" disabled={busy}
-                onClick={() => void send('/api/agent/revoke', { taskId: task.id })}>{task.mode === 'prepare' ? 'Ask before each action' : 'Ask before each navigation'}</button>
+                onClick={() => void send('/api/agent/revoke', { taskId: task.id })}>{task.startMode === 'selectedTabs' ? 'Ask before each page read' : task.mode === 'prepare' ? 'Ask before each action' : 'Ask before each navigation'}</button>
               <details><summary>Permission scope</summary>
-                <p>{task.mode === 'prepare' ? 'Validated public search fields, filters, widgets and GET searches only.' : 'Searches, observed links and their redirects only.'} No purchases, bookings, messages, uploads, account changes or non-search submissions. Expires when this run ends.</p>
+                <p>{task.startMode === 'selectedTabs' ? 'Read-only snapshots of the explicitly selected, unchanged tabs only. No other tabs or navigation.' : task.mode === 'prepare' ? 'Validated public search fields, filters, widgets and GET searches only.' : 'Searches, observed links and their redirects only.'} No purchases, bookings, messages, uploads, account changes or non-search submissions. Expires when this run ends.</p>
                 <small>Revoking affects subsequent proposals. Use Stop to interrupt the current action.</small>
               </details>
             </aside>}
@@ -295,6 +321,11 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
               onClick={() => void send('/api/agent/stop', { taskId: task.id })}>Stop / take over</button>}
           </div>
           <SafetyNotice task={task} />
+          {task.startMode === 'selectedTabs' && <details className="selected-scope" aria-label="Selected sharing scope">
+            <summary>{task.selectedTabs.length} explicitly selected tabs · Read-only scope</summary>
+            <ul>{task.selectedTabs.map(tab => <li key={tab.id}>{tab.title} · {tab.url}</li>)}</ul>
+            <p>Only these unchanged documents can be read. Switching, navigating or closing a tab stops the task. Original pages are not replaced.</p>
+          </details>}
           {active(task) && task.mode === 'prepare' && <p className="privacy-note">Preparation is controlling this webpage. Clicking, typing or scrolling on the page stops the task; assistant approvals and activity controls do not.</p>}
           {task.requirements && <aside className="task-requirements" aria-label="Interpreted search requirements">
             <strong>Exact search I understood</strong>
@@ -327,32 +358,37 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
             <small>Same conversation. Your earlier details and evidence are kept.</small>
           </form>}
           {task.pending && (
-            <div className="task-approval" ref={confirmation} tabIndex={-1} role="region" aria-label={task.pending.kind === 'operation' ? 'Exact page action approval' : 'Navigation approval'}>
+            <div className="task-approval" ref={confirmation} tabIndex={-1} role="region" aria-label={task.pending.kind === 'readTab' ? 'Selected page sharing approval' : task.pending.kind === 'operation' ? 'Exact page action approval' : 'Navigation approval'}>
               {task.pending.operation ? <OperationApproval task={task} busy={busy} onApprove={(allow, approveAll = false) => void send('/api/agent/approve', {
                 taskId: task.id, approvalId: task.pending?.id, allow, approveAll,
               })} /> : <>
               <span className="local-eyebrow">Your approval is required</span>
-              <h3>{task.pending.kind === 'search' ? 'Run this web search?' : task.pending.kind === 'redirect' ? 'Follow this redirect to another website?' : 'Follow this link?'}</h3>
+              <h3>{task.pending.kind === 'readTab' ? 'Read this selected page?' : task.pending.kind === 'search' ? 'Run this web search?' : task.pending.kind === 'redirect' ? 'Follow this redirect to another website?' : 'Follow this link?'}</h3>
               <p>{task.pending.reason}</p>
               <code>{task.pending.url}</code>
               <div className="task-approval-actions approval-choices">
                 <button className="assistant-secondary" disabled={busy}
                   onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: false })}>Decline & stop</button>
                 <button className="assistant-primary approval-allow" disabled={busy}
-                  onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true })}>Approve navigation</button>
+                  onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true })}>{task.pending.kind === 'readTab' ? 'Approve this page read' : 'Approve navigation'}</button>
                 <button className="assistant-primary approval-allow-all" disabled={busy}
                   onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true, approveAll: true })}>Approve all for this task</button>
               </div>
-              <p className="approval-scope">{task.mode === 'prepare'
+              <p className="approval-scope">{task.pending.kind === 'readTab'
+                ? 'Approve all covers only the explicitly selected, unchanged pages for this comparison task. Each read is audited. No other tabs, navigation or page changes. Revoke affects unread pages; Stop cancels local work, but cannot undo content already shared or remote model charges.'
+                : task.mode === 'prepare'
                 ? 'Approve all covers supported public search actions and GET navigation in this task only. Each action is audited and revalidated. No booking, payment, messages, uploads or non-search submissions. Revoke or Stop at any time.'
                 : 'Allow all covers up to six page reads across websites in this run, including sharing their content with your model. It never authorizes bookings, buying, form submissions, uploads or downloads. You can revoke it or stop at any time.'}</p>
-              <details><summary>Navigation & privacy details</summary>
-                <p className="privacy-note">This replaces the page in this tab and shares its content with your model. Same-site redirects are followed; redirects to another website pause for approval (or your research permission). Checkout/account pages, form submissions, popups and downloads are blocked. Normal site scripts, their network requests and signed-in cookies still apply; this is not an isolated browsing profile.</p>
+              <details><summary>{task.pending.kind === 'readTab' ? 'Read-only sharing & privacy details' : 'Navigation & privacy details'}</summary>
+                <p className="privacy-note">{task.pending.kind === 'readTab'
+                  ? 'Snapshots do not activate, navigate or change original tabs. Native URL and document identity are checked before and after reading, and before publishing. Existing website scripts and signed-in cookies still run; this is not an isolated profile. Two concurrent no-tools readers may send approved page text to your selected model.'
+                  : `This replaces the page in ${task.preserveTabs ? 'the dedicated research tab, not your original tabs' : 'this tab'} and shares its content with your model. Same-site redirects are followed; redirects to another website pause for approval (or your research permission). Checkout/account pages, form submissions, popups and downloads are blocked. Normal site scripts, their network requests and signed-in cookies still apply; this is not an isolated browsing profile.`}</p>
               </details>
               </>}
             </div>
           )}
           <OperationTrail task={task} />
+          {(task.status === 'completed' || task.status === 'noEvidence') && task.comparison && <ComparisonResults task={task} />}
           {task.error && <article className="task-error" ref={resultCard} tabIndex={-1} aria-label="Task failure" role="alert">
             <strong>Task failed without a final answer</strong><p>{task.error}</p>
             <TaskDiagnostic task={task} />

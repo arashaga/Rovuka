@@ -3,6 +3,7 @@ import { host } from './ipc.ts'
 import { taskActive, type Task, type ResearchReport } from './taskTypes.ts'
 import TaskDiagnostic, { DiagnosticActions } from './TaskDiagnostic.tsx'
 import SafetyNotice from './SafetyNotice.tsx'
+import ComparisonResults from './ComparisonResults.tsx'
 
 type Offer = NonNullable<ResearchReport['options'][number]['offer']>
 const bases: Record<Offer['basis'], string> = {
@@ -84,12 +85,12 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
     <div className="findings-shell">
       <nav className="findings-nav" aria-label="Findings controls">
         <button className="assistant-secondary" onClick={onBack}>Back to conversation</button>
-        <span>Your options</span>
+        <span>{task.comparison ? 'Research workspace' : 'Your options'}</span>
         <button className="assistant-primary" onClick={onNew}>New task</button>
       </nav>
       <header className="findings-hero">
         <span className="local-eyebrow">{complete ? hasOptions ? 'Choose your next step' : 'What I found' : 'Research incomplete'}</span>
-        <h1>{complete ? report?.title || 'Your results' : task.status === 'failed' ? 'Task failed — no options verified' : 'No completed options yet'}</h1>
+        <h1>{complete ? task.comparison ? 'Your selected-page comparison' : report?.title || 'Your results' : task.status === 'failed' ? 'Task failed — no results verified' : 'No completed results yet'}</h1>
         {complete && report && <p className="findings-summary">{report.summary}</p>}
         {!hasOptions && <p className="findings-goal">{task.goal}</p>}
         {!hasOptions && <div className="findings-stats">
@@ -100,6 +101,7 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
         </div>}
       </header>
       <SafetyNotice task={task} />
+      {(complete || task.status === 'noEvidence') && task.comparison && <ComparisonResults task={task} />}
       {!complete && <article className="findings-card findings-incomplete">
         <h2>{task.error?.includes('unapproved navigation') ? 'A website navigation was blocked' : 'No accepted final recommendation'}</h2>
         <p>{task.error || task.message || 'The task stopped before a final brief was accepted.'}</p>
@@ -202,7 +204,7 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
         </section>
       </div>}
       {!complete && context}
-      <footer className="findings-footer">Session-only research · Links open in new tabs · Preparation preserves these findings · A new research task replaces this run</footer>
+      <footer className="findings-footer">Session-only research workspace · Links open in new tabs · Preparation preserves these findings · A new research task replaces this run</footer>
     </div>
   </section>
 }

@@ -16,6 +16,26 @@ export interface Source {
   kind: 'search' | 'page'
 }
 
+export interface ReadTarget {
+  id: number
+  url: string
+  title: string
+  documentEpoch: number
+}
+
+export interface ReadTab {
+  target: ReadTarget
+  unavailable: string | null
+}
+
+export interface TabComparison {
+  columns: string[]
+  rows: { sourceId: number; quotes: (string | null)[] }[]
+  capturedAt: string
+  unknownCells: number
+  duplicateTabs: number
+}
+
 export interface ResearchReport {
   intent: 'travel' | 'shopping' | 'general' | 'research'
   title: string
@@ -48,12 +68,12 @@ export interface Task {
   status: TaskStatus
   steps: string[]
   sources: Source[]
-  pending: { id: string; url: string; reason: string; kind: 'search' | 'link' | 'redirect' | 'operation'; operation: OperationPreview | null } | null
+  pending: { id: string; url: string; reason: string; kind: 'search' | 'link' | 'redirect' | 'operation' | 'readTab'; operation: OperationPreview | null } | null
   answer: string | null
   error: string | null
   maxSteps: number
   pagesRead: number
-  startMode: 'webSearch' | 'currentPage'
+  startMode: 'webSearch' | 'currentPage' | 'selectedTabs'
   message: string | null
   conversation: { role: 'user' | 'assistant'; content: string }[]
   questionId: string | null
@@ -75,6 +95,10 @@ export interface Task {
   verification: { checks: number; verified: boolean; detail: string }
   issue: { category: string; recovery: string; retryable: boolean } | null
   modelUsage: { requests: number; readerRequests: number; elapsedMs: number; repairs: number }
+  selectedTabs: ReadTarget[]
+  comparison: TabComparison | null
+  preserveTabs: boolean
+  workspaceTab: number | null
   actions: { id: string; kind: OperationKind; target: string; value: string | null; status: 'awaitingApproval' | 'approved' | 'executed' | 'stale' | 'failed' | 'cancelled' | 'declined' }[]
 }
 

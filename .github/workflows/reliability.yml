@@ -76,6 +76,10 @@ jobs:
         run: |
           node .\scripts\test-agent.cjs --eval-only --repeat 2 --eval-output "$env:RUNNER_TEMP\rovuka-native-evaluation.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Scoped multi-tab native regressions
+        run: |
+          node .\scripts\test-agent.cjs --multitab-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload metadata-only native outcomes
         if: always()
         uses: actions/upload-artifact@v4
