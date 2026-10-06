@@ -1,24 +1,18 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
-import { host, type AssistantPanel } from './ipc.ts'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { host, type AssistantPanel, type TabInfo } from './ipc.ts'
+import { apiRequest, memoryChangesChannel } from './modelApi.ts'
+import { BrandMark, Icon, type IconName } from './Icons.tsx'
+import type { MemoryOverview } from './memoryTypes.ts'
 import './StartPage.css'
 
-type IconName = 'spark' | 'arrow' | 'plane' | 'bag' | 'research' | 'page' | 'model' | 'tabs' | 'shield'
+type Intent = 'research' | 'options' | 'prepare' | 'tabs'
 
-function Icon({ name, className = '' }: { name: IconName; className?: string }) {
-  const paths: Record<IconName, ReactNode> = {
-    spark: <path d="m12 2 2.6 7.4L22 12l-7.4 2.6L12 22l-2.6-7.4L2 12l7.4-2.6Z" />,
-    arrow: <path d="M5 12h14m-6-6 6 6-6 6" />,
-    plane: <><path d="m21 3-6 18-3-9-9-3Z" /><path d="m12 12 9-9" /></>,
-    bag: <><path d="M5 8h14l1 13H4Z" /><path d="M8 8V6a4 4 0 0 1 8 0v2" /></>,
-    research: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5M8 8h5m-5 4h3" /></>,
-    page: <><path d="M5 3h10l4 4v14H5Z" /><path d="M14 3v5h5M8 12h8m-8 4h5" /></>,
-    model: <><rect x="5" y="5" width="14" height="14" rx="3" /><path d="M9 9h6v6H9ZM9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3" /></>,
-    tabs: <><rect x="3" y="7" width="14" height="14" rx="2" /><path d="M7 7V3h14v14h-4M3 11h14" /></>,
-    shield: <><path d="m12 2 8 4v6c0 5-8 10-8 10S4 17 4 12V6Z" /><path d="m8 12 3 3 5-6" /></>,
-  }
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"
-    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
-}
+const intents: { id: Intent; icon: IconName; label: string }[] = [
+  { id: 'research', icon: 'spark', label: 'Intelligent synthesis' },
+  { id: 'options', icon: 'matrix', label: 'Compare options' },
+  { id: 'prepare', icon: 'shield', label: 'Prepare a search' },
+  { id: 'tabs', icon: 'tabs', label: 'Compare open tabs' },
+]
 
 const examples: { id: string; icon: IconName; category: string; title: string; description: string; goal: string }[] = [
   {
@@ -40,67 +34,97 @@ const examples: { id: string; icon: IconName; category: string; title: string; d
 
 function JourneyIllustration() {
   return <figure className="start-illustration">
-    <svg viewBox="0 0 520 396" aria-hidden="true">
-      <path className="start-art-orbit" d="M26 219C-10 62 238 8 430 68s73 265-126 270S61 386 26 219Z" />
-      <path className="start-art-orbit start-art-orbit-inner" d="M51 177C81 24 401 54 453 199s-116 179-264 123S21 243 51 177Z" />
+    <svg viewBox="0 0 340 234" aria-hidden="true">
       <g className="start-art-float">
-        <rect className="start-art-soft" x="90" y="56" width="372" height="262" rx="16" transform="rotate(5 276 187)" />
-        <rect className="start-art-surface" x="58" y="80" width="388" height="260" rx="16" />
-        <path className="start-art-line" d="M58 116h388" />
-        <circle className="start-art-dot" cx="80" cy="98" r="4" />
-        <circle className="start-art-dot" cx="95" cy="98" r="4" />
-        <circle className="start-art-dot" cx="110" cy="98" r="4" />
-        <rect className="start-art-soft" x="147" y="90" width="229" height="16" rx="8" />
-        <text className="start-art-title" x="82" y="150">Your next step, in focus.</text>
-        {[183, 237, 291].map((y, index) => <g key={y}>
-          <rect className={index === 0 ? 'start-art-selected' : 'start-art-soft'} x="78" y={y - 21} width="347" height="45" rx="10" />
-          <circle className={index === 0 ? 'start-art-accent' : 'start-art-surface'} cx="101" cy={y + 1} r="12" />
-          <text className={index === 0 ? 'start-art-number first' : 'start-art-number'} x="101" y={y + 5}>{index + 1}</text>
-          <path className="start-art-text-line" d={`M126 ${y - 5}h${[133, 110, 148][index]}`} />
-          <path className="start-art-line" d={`M126 ${y + 8}h${[104, 133, 89][index]}`} />
-          <path className="start-art-arrow" d={`M388 ${y}h16m-5-5 5 5-5 5`} />
+        <rect className="start-art-surface" x="8" y="8" width="324" height="218" rx="13" />
+        <path className="start-art-line" d="M8 42h324" />
+        <rect className="start-art-selected" x="23" y="18" width="137" height="15" rx="4" />
+        <text className="start-art-tab" x="31" y="29">A clearer research workspace</text>
+        <path className="start-art-line" d="M174 25h115" />
+        <text className="start-art-title" x="24" y="70">From intent to insight.</text>
+        {[101, 138, 175].map((y, index) => <g key={y}>
+          <rect className={index === 0 ? 'start-art-selected' : 'start-art-soft'} x="23" y={y - 16} width="293" height="30" rx="6" />
+          <circle className={index === 0 ? 'start-art-accent' : 'start-art-surface'} cx="41" cy={y - 1} r="8" />
+          <text className={index === 0 ? 'start-art-number first' : 'start-art-number'} x="41" y={y + 2}>{index + 1}</text>
+          <text className="start-art-row" x="59" y={y + 2}>{['Find the useful sources', 'Compare what matters', 'Choose your next step'][index]}</text>
+          <path className="start-art-arrow" d={`M290 ${y}h11m-4-4 4 4-4 4`} />
         </g>)}
+        <text className="start-art-caption" x="24" y="209">Sources, not guesses.</text>
+        <path className="start-art-arrow" d="m292 204 4 4 9-9" />
       </g>
-      <g className="start-art-badge">
-        <circle className="start-art-surface" cx="433" cy="71" r="34" />
-        <circle className="start-art-globe" cx="433" cy="71" r="18" />
-        <ellipse className="start-art-globe" cx="433" cy="71" rx="8" ry="18" />
-        <path className="start-art-globe" d="M415 71h36m-33-9h30m-30 18h30" />
-      </g>
-      <g>
-        <rect className="start-art-surface" x="20" y="296" width="162" height="48" rx="12" />
-        <path className="start-art-arrow" d="m37 321 5 5 9-11" />
-        <text className="start-art-caption" x="60" y="326">Sources, not guesses.</text>
-      </g>
-      <path className="start-art-spark" d="m45 58 5 13 13 5-13 5-5 13-5-13-13-5 13-5Z" />
-      <path className="start-art-spark" d="m466 277 4 10 10 4-10 4-4 10-4-10-10-4 10-4Z" />
     </svg>
-    <figcaption>Research. Compare. Choose.<span>You make the final move.</span></figcaption>
+    <figcaption>Research. Compare. Choose.<span>Illustration - you make the final move.</span></figcaption>
   </figure>
 }
 
 export default function StartPage() {
   const [goal, setGoal] = useState('')
+  const [intent, setIntent] = useState<Intent>('options')
+  const [tabs, setTabs] = useState<TabInfo[]>([])
+  const [memory, setMemory] = useState<MemoryOverview | null>(null)
+  const [memoryError, setMemoryError] = useState('')
+  const intentTabs = useRef<HTMLDivElement>(null)
+  const sourceTabs = tabs.filter(tab => /^https?:\/\//.test(tab.url) && !tab.loading && !tab.loadError).length
   const open = (panel: AssistantPanel, draft?: string) => host.send({ type: 'openAssistant', panel, goal: draft })
-  const prepare = (event: FormEvent<HTMLFormElement>) => {
+  const openIntent = (mode: Intent, draft = '') => host.send({
+    type: 'openAssistant', panel: 'task', goal: draft,
+    prepare: mode === 'prepare', taskStartMode: mode === 'tabs' ? 'selectedTabs' : 'webSearch',
+    compareOptions: mode !== 'research',
+  })
+  const prepareDraft = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (goal.trim()) open('task', goal.trim())
+    if (goal.trim()) openIntent(intent, goal.trim())
   }
+
+  useEffect(() => host.subscribe(event => { if (event.type === 'tabs') setTabs(event.tabs) }), [])
+
+  useEffect(() => {
+    let alive = true
+    let request: AbortController | undefined
+    const refresh = () => {
+      request?.abort()
+      const controller = new AbortController()
+      request = controller
+      void apiRequest<MemoryOverview>('/api/memory', { signal: controller.signal })
+        .then(data => {
+          if (!alive || controller.signal.aborted) return
+          setMemory(data)
+          setMemoryError(data.lastError || '')
+        })
+        .catch((reason: unknown) => {
+          if (alive && !controller.signal.aborted) {
+            setMemoryError(reason instanceof Error ? reason.message : String(reason))
+          }
+        })
+    }
+    const channel = new BroadcastChannel(memoryChangesChannel)
+    channel.onmessage = event => { if (event.data === 'changed') refresh() }
+    refresh()
+    window.addEventListener('focus', refresh)
+    window.addEventListener(memoryChangesChannel, refresh)
+    return () => {
+      alive = false
+      request?.abort()
+      channel.close()
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener(memoryChangesChannel, refresh)
+    }
+  }, [])
 
   return <main className="start-page">
     <a className="start-skip" href="#start-task">Skip to task examples</a>
     <div className="start-shell">
       <section className="start-updates" aria-label="What's new">
         <div className="start-update-label"><span className="start-update-dot" />What's new</div>
-        <div className="start-update-copy"><strong>Good research, worth remembering.</strong>
-          <span>Local memory &amp; saved comparisons · Opt-in capture · Preview before model sharing</span>
+        <div className="start-update-copy"><strong>A fresh workspace. The same control.</strong>
+          <span>New intent studio, clearer tabs and local memory. No task starts without you.</span>
         </div>
         <button onClick={() => open('memory')}>Explore Memory <Icon name="arrow" /></button>
       </section>
 
       <header className="start-header">
-        <div className="start-brand"><span className="start-brand-mark"><Icon name="spark" /></span>
-          <div><strong>Rovuka</strong><span>Your web. Your model. Your choice.</span></div>
+        <div className="start-brand"><BrandMark />
+          <strong>Rovuka</strong><span className="start-preview-badge">EARLY PREVIEW</span>
         </div>
         <nav aria-label="Start page shortcuts">
           <button className="start-text-button" onClick={() => host.send({ type: 'focusOmnibox' })}>Just browse</button>
@@ -110,26 +134,72 @@ export default function StartPage() {
 
       <section className="start-hero" aria-labelledby="start-title">
         <div className="start-hero-copy">
-          <span className="start-eyebrow"><Icon name="spark" />A browser for your next move</span>
+          <span className="start-eyebrow"><Icon name="spark" />Your web. Your model. Your next move.</span>
           <h1 id="start-title">Less searching.<br /><em>More finding.</em></h1>
-          <p className="start-lede">Turn a question into a useful shortlist. Explore the web, compare your options, and keep the links that matter.</p>
-          <form className="start-composer" onSubmit={prepare}>
-            <label htmlFor="start-goal">What would you like to find?</label>
-            <textarea id="start-goal" value={goal} maxLength={5000} rows={2}
-              placeholder="A weekend getaway, the right headphones, a better way to work..."
-              onChange={event => setGoal(event.target.value)} />
-            <div className="start-composer-footer"><span>Prepare here. Approve in Task mode.</span>
-              <button className="start-primary-button" type="submit" disabled={!goal.trim()}>Prepare a task <Icon name="arrow" /></button>
-            </div>
-          </form>
-          <p className="start-consent"><Icon name="shield" />No research starts until you choose a model, allow sharing, and press Start.</p>
+          <p className="start-lede">Turn browsing into getting things done. Research with sources, compare the details, and keep what matters - with you in control.</p>
         </div>
         <JourneyIllustration />
       </section>
 
+      <form className="start-composer" onSubmit={prepareDraft} aria-labelledby="start-studio-title">
+        <div className="start-studio-heading"><Icon name="spark" /><h2 id="start-studio-title">Intent Studio</h2><span>From a goal to a useful next step</span></div>
+        <div className="start-intent-modes" ref={intentTabs} role="tablist" aria-label="Intent mode">
+          {intents.map((mode, index) => <button key={mode.id} type="button" role="tab" data-intent={mode.id}
+            aria-selected={mode.id === intent} tabIndex={mode.id === intent ? 0 : -1}
+            onClick={() => setIntent(mode.id)} onKeyDown={event => {
+              const next = event.key === 'ArrowRight' ? (index + 1) % intents.length
+                : event.key === 'ArrowLeft' ? (index + intents.length - 1) % intents.length
+                : event.key === 'Home' ? 0 : event.key === 'End' ? intents.length - 1 : -1
+              if (next < 0) return
+              event.preventDefault()
+              setIntent(intents[next].id)
+              intentTabs.current?.querySelector<HTMLButtonElement>(`[data-intent="${intents[next].id}"]`)?.focus()
+            }}>
+            <Icon name={mode.icon} />{mode.label}{mode.id === 'tabs' && <span className="start-count">{sourceTabs}</span>}
+          </button>)}
+        </div>
+        <label htmlFor="start-goal">What do you want to accomplish?</label>
+        <textarea id="start-goal" value={goal} maxLength={5000} rows={2}
+          placeholder={intent === 'prepare' ? 'Prepare a Cancun hotel search with my exact dates and guest count. Stop before booking.'
+            : intent === 'tabs' ? 'Compare the tabs I choose. Show the important differences and what still needs checking.'
+              : 'Find a weekend getaway, compare the right headphones, or research an idea...'}
+          onChange={event => setGoal(event.target.value)} />
+        <div className="start-composer-footer"><span><Icon name="shield" />{intent === 'tabs' ? 'Choose tabs and allow sharing in Task mode.'
+          : intent === 'prepare' ? 'Open a public search page before starting. Review each change or approve a task scope.'
+            : 'Editable draft first. Sharing and approvals stay your choice.'}</span>
+          <button className="start-primary-button" type="submit" disabled={!goal.trim()}>Prepare a task <Icon name="arrow" /></button>
+        </div>
+        <p className="start-consent">No task starts until you choose a model, review sharing, and press Start. Booking and payment stay manual.</p>
+      </form>
+
+      <section className="start-workspaces" aria-labelledby="start-workspaces-title">
+        <div className="start-section-heading"><h2 id="start-workspaces-title">Your workspaces</h2>
+          <button className="start-text-button" onClick={() => open('memory')}>Open Memory <Icon name="arrow" /></button>
+        </div>
+        <div className="start-workspace-grid">
+          <article className="start-workspace-card">
+            <div className="start-workspace-top"><span className="start-icon-tile"><Icon name="clock" /></span>
+              <span className="start-workspace-state">{memory ? memory.config.captureEnabled ? 'Capture on' : 'Capture paused' : 'Local only'}</span></div>
+            <h3>Good research, remembered.</h3>
+            {memoryError ? <p className="start-memory-error" role="alert">Memory needs attention: {memoryError}</p>
+              : <p>{memory ? `${memory.research} saved research ${memory.research === 1 ? 'snapshot' : 'snapshots'} and ${memory.pages} saved ${memory.pages === 1 ? 'page' : 'pages'}. Nothing is shared without a separate preview.` : 'Loading your local memory...'}</p>}
+            <button onClick={() => open('memory')}>Explore local memory <Icon name="arrow" /></button>
+          </article>
+          <article className="start-workspace-card">
+            <div className="start-workspace-top"><span className="start-icon-tile"><Icon name="tabs" /></span>
+              <span className="start-workspace-state">{sourceTabs} open web {sourceTabs === 1 ? 'page' : 'pages'}</span></div>
+            <h3>See your options together.</h3>
+            <p>Pick two to six readable tabs. Compare with source links, honest gaps and no action permission.</p>
+            <button onClick={() => openIntent('tabs', 'Compare the tabs I select. Show the important differences, sources and any unknown details.')}>Compare selected tabs <Icon name="arrow" /></button>
+          </article>
+          <button className="start-workspace-new" onClick={() => open('task')}>
+            <span><Icon name="plus" /></span><strong>Start something new</strong><small>A fresh goal. An editable draft.</small>
+          </button>
+        </div>
+      </section>
+
       <section className="start-examples" id="start-task" aria-labelledby="start-examples-title">
-        <div className="start-section-heading"><div><span className="start-eyebrow">Try a little possibility</span>
-          <h2 id="start-examples-title">One goal. A better starting point.</h2></div><p>Choose an example, then make it yours.</p>
+        <div className="start-section-heading"><h2 id="start-examples-title">A little inspiration</h2><p>Choose an example, then make it yours.</p>
         </div>
         <div className="start-example-grid">
           {examples.map(example => <button className="start-example" data-example={example.id} key={example.id}
@@ -163,7 +233,7 @@ export default function StartPage() {
         <button className="start-outline-button" onClick={() => open('safety')}>Review safety <Icon name="arrow" /></button>
       </section>
 
-      <footer className="start-footer"><span>Built for curiosity. Designed to keep you in control.</span><span>Rovuka · Research + preparation previews</span></footer>
+      <footer className="start-footer"><span><Icon name="shield" />Local memory. Explicit sharing. Human decisions.</span><span>Rovuka - Research + preparation previews</span></footer>
     </div>
   </main>
 }

@@ -822,6 +822,8 @@ pub fn handle_command(cmd: Command) {
             panel,
             goal,
             prepare,
+            task_start_mode,
+            compare_options,
         } => {
             if !with_state(|s| s.assistant_open) {
                 toggle_assistant();
@@ -832,6 +834,8 @@ pub fn handle_command(cmd: Command) {
                 panel,
                 goal,
                 prepare,
+                task_start_mode,
+                compare_options,
             });
             if let Some(view) = with_state(|s| s.assistant_view.clone()) {
                 view.request_focus();
@@ -1488,7 +1492,7 @@ wrap_browser_view_delegate! {
     impl ViewDelegate {
         fn preferred_size(&self, _view: Option<&mut View>) -> Size {
             // A zero-height Size is empty to CEF; the layout stretches this height.
-            Size { width: 360, height: 1 }
+            Size { width: 384, height: 1 }
         }
 
         fn minimum_size(&self, _view: Option<&mut View>) -> Size {

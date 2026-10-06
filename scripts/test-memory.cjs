@@ -427,6 +427,7 @@ module.exports = async function memoryChecks(test) {
     assistant = await waitFor(() => test.connect('assistant'), 'corrupt memory UI connection');
     await waitFor(() => ui('document.querySelector(".memory-panel [role=alert]")?.textContent.includes("unavailable")'), 'explicit memory storage failure in UI');
     console.log('PASS: corrupt storage is preserved and visibly reported; ordinary browser navigation and authenticated task APIs remain responsive');
+    return { unavailableError: unavailable.error };
   } finally {
     assistant?.close();
     if (test.chrome()) await test.chrome().command('Emulation.clearDeviceMetricsOverride');

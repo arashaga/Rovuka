@@ -170,6 +170,16 @@ Start-page/assistant-shortcut changes must also pass
 `node .\scripts\test-agent.cjs --start-page-only`. The normal launch/new-tab page
 must stay in a separate trusted BrowserView, never a token-bearing content tab.
 Opening a task draft must not call a model or preselect sharing consent.
+Reference-redesign changes must also pass `--redesign-only` after rebuilding.
+Preserve 84-DIP dark chrome and the 384-DIP preferred assistant; respect theme,
+keyboard, close/new/overflow controls and trusted native hit targets.
+The intent studio maps only to supported brief/options/preparation/selected-tab
+drafts. Mirror optional draft-only IPC fields and preserve old wire defaults;
+they never carry selections, sharing consent or action permission.
+Use real native model/memory metadata, not reference mock claims or static
+results. Cross-surface change hints contain no data; re-fetch authenticated
+metadata on successful writes and retain visible errors. Ship local SVG/CSS,
+not the reference's CDN, decorative window controls or unsupported features.
 Navigation changes must pass `--navigation-only` and the full native suite.
 Keep pending/failed address metadata separate from the committed document URL
 used by native guards. Main-frame errors use the separate trusted start view,

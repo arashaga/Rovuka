@@ -18,6 +18,13 @@ pub enum AssistantPanel {
     Memory,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskDraftStart {
+    WebSearch,
+    SelectedTabs,
+}
+
 /// UI -> host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
@@ -74,6 +81,10 @@ pub enum Command {
         goal: Option<String>,
         #[serde(default, skip_serializing_if = "is_false")]
         prepare: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_start_mode: Option<TaskDraftStart>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compare_options: Option<bool>,
     },
     SetAssistantExpanded {
         expanded: bool,
@@ -181,6 +192,10 @@ pub enum Event {
         goal: Option<String>,
         #[serde(default, skip_serializing_if = "is_false")]
         prepare: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_start_mode: Option<TaskDraftStart>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compare_options: Option<bool>,
     },
     PageText {
         request_id: String,
@@ -351,6 +366,8 @@ mod tests {
                 panel: AssistantPanel::Task,
                 goal: Some("Compare headphones".into()),
                 prepare: false,
+                task_start_mode: None,
+                compare_options: None,
             },
             Command::Navigate {
                 tab_id: None,
@@ -398,6 +415,8 @@ mod tests {
                 panel: AssistantPanel::Task,
                 goal: Some(goal),
                 prepare: false,
+                task_start_mode: None,
+                compare_options: None,
             } if goal == "Compare headphones"
         ));
         assert!(
@@ -409,6 +428,8 @@ mod tests {
                 panel: AssistantPanel::Safety,
                 goal: None,
                 prepare: false,
+                task_start_mode: None,
+                compare_options: None,
             })
             .unwrap(),
             r#"{"type":"assistantWorkspace","requestId":"draft-1","panel":"safety","goal":null}"#
@@ -431,6 +452,41 @@ mod tests {
             command,
             Command::OpenAssistant { prepare: false, .. }
         ));
+    }
+
+    #[test]
+    fn task_draft_shortcuts_are_typed_and_do_not_change_legacy_defaults() {
+        let command: Command = serde_json::from_str(
+            r#"{"type":"openAssistant","panel":"task","taskStartMode":"selectedTabs","compareOptions":false}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command,
+            Command::OpenAssistant {
+                task_start_mode: Some(TaskDraftStart::SelectedTabs),
+                compare_options: Some(false),
+                prepare: false,
+                ..
+            }
+        ));
+        assert!(
+            serde_json::from_str::<Command>(
+                r#"{"type":"openAssistant","panel":"task","taskStartMode":"purchase"}"#
+            )
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::to_string(&Event::AssistantWorkspace {
+                request_id: "draft-2".into(),
+                panel: AssistantPanel::Task,
+                goal: None,
+                prepare: false,
+                task_start_mode: Some(TaskDraftStart::WebSearch),
+                compare_options: Some(false),
+            })
+            .unwrap(),
+            r#"{"type":"assistantWorkspace","requestId":"draft-2","panel":"task","goal":null,"taskStartMode":"webSearch","compareOptions":false}"#
+        );
     }
 
     #[test]

@@ -91,6 +91,8 @@ async function main() {
   const multitabOnly = process.argv.includes('--multitab-only') || liveMultitab;
   const memoryOnly = process.argv.includes('--memory-only');
   const tabsOnly = process.argv.includes('--tabs-only');
+  const redesignOnly = process.argv.includes('--redesign-only');
+  assert(!redesignOnly || !liveModel, '--redesign-only uses loopback fixtures and a mock model only');
   const liveHotel = process.argv.includes('--live-hotel');
   const approveAllHotel = process.argv.includes('--approve-all-hotel');
   const fixtureParty = liveModel && process.argv.includes('--family')
@@ -978,7 +980,7 @@ async function main() {
     else childEnv.AIB_MODEL_SETTINGS_FILE = settings;
     child = spawn(browserExecutable,
       ['--graphics=software', `--remote-debugging-port=${debugPort}`, `--profile-dir=${path.join(temp, 'Profile')}`,
-        ...(startPageOnly ? [] : [`--url=${fixtureBase}/start`])],
+        ...(startPageOnly || redesignOnly ? [] : [`--url=${fixtureBase}/start`])],
       { cwd: root, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', chunk => { logs += chunk; });
     child.stderr.on('data', chunk => { logs += chunk; });
@@ -1200,13 +1202,7 @@ async function main() {
       assert(!connected.exceptionDetails, JSON.stringify(connected.exceptionDetails));
       await waitFor(tabSnapshot, 'restarted native tab snapshot');
     };
-    const memoryChecks = () => require(path.join(__dirname, 'test-memory.cjs'))({
-      rpc, navigate, start, approve, terminal, pending, tabSnapshot, trustedClick, restartBrowser, tabsOnly,
-      fixtureBase, memoryFile: path.join(temp, 'Memory', 'memory.sqlite3'),
-      memoryDirectory: path.join(temp, 'Memory'), auditDirectory: path.join(temp, 'Audit'),
-      privateValues: [...privateValues, 'memoryPrivatePlain', 'MEMORY_PRIVATE_INPUT', 'MEMORY_PRIVATE_TEXTAREA',
-        'MEMORY_PRIVATE_SELECT', 'MEMORY_PRIVATE_EDITABLE', 'MEMORY_PRIVATE_HIDDEN',
-        'COMPARISON_PRIVATE_INPUT', 'COMPARISON_PRIVATE_PASSWORD', 'UNSELECTED_PRIVATE_MARKER'],
+    const browserUi = {
       stats: () => ({ modelCalls, readerCalls, sharedContextInputs: [...sharedContextInputs] }),
       chrome: () => browserSocket,
       connect: async surface => {
@@ -1217,6 +1213,19 @@ async function main() {
       send: command => browserSocket.command('Runtime.evaluate', {
         expression: `window.__agentTestConnection.send(${JSON.stringify(JSON.stringify(command))})`,
       }),
+    };
+    const redesignChecks = memoryState => require(path.join(__dirname, 'test-redesign.cjs'))({
+      ...browserUi, rpc, navigate, start, pending, terminal, tabSnapshot, trustedClick, fixtureBase,
+      memoryUnavailableError: memoryState?.unavailableError,
+    });
+    const memoryChecks = () => require(path.join(__dirname, 'test-memory.cjs'))({
+      ...browserUi,
+      rpc, navigate, start, approve, terminal, pending, tabSnapshot, trustedClick, restartBrowser, tabsOnly,
+      fixtureBase, memoryFile: path.join(temp, 'Memory', 'memory.sqlite3'),
+      memoryDirectory: path.join(temp, 'Memory'), auditDirectory: path.join(temp, 'Audit'),
+      privateValues: [...privateValues, 'memoryPrivatePlain', 'MEMORY_PRIVATE_INPUT', 'MEMORY_PRIVATE_TEXTAREA',
+        'MEMORY_PRIVATE_SELECT', 'MEMORY_PRIVATE_EDITABLE', 'MEMORY_PRIVATE_HIDDEN',
+        'COMPARISON_PRIVATE_INPUT', 'COMPARISON_PRIVATE_PASSWORD', 'UNSELECTED_PRIVATE_MARKER'],
     });
     const multitabChecks = async () => {
       const initial = await waitFor(tabSnapshot, 'multi-tab initial state');
@@ -1930,6 +1939,22 @@ async function main() {
           assert.equal(requests.http.length, insecureBefore + 1, 'The failed HTTP retry must not loop');
           assert.equal(await evaluate(browserSocket, 'document.querySelector(".connection-state")?.textContent'), 'Not secure');
           assert.equal(await evaluate(browserSocket, 'getComputedStyle(document.querySelector(".omnibox input")).paddingLeft'), '88px');
+          for (const theme of ['light', 'dark']) {
+            for (const width of [1280, 320]) {
+              await browserSocket.command('Emulation.setDeviceMetricsOverride', { width, height: 84, deviceScaleFactor: 1, mobile: false });
+              await evaluate(browserSocket, `document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
+              const warning = await evaluate(browserSocket, `(() => {
+                const field=document.querySelector('.omnibox input'),box=field.getBoundingClientRect();
+                const label=document.querySelector('.connection-state').getBoundingClientRect();
+                return {fits:document.documentElement.scrollWidth<=innerWidth,
+                  inside:label.left>=box.left && label.right<=box.right,
+                  textClear:label.right<=box.left+parseFloat(getComputedStyle(field).paddingLeft),
+                  replacesIcon:getComputedStyle(document.querySelector('.omnibox-icon')).display==='none'};
+              })()`);
+              assert.deepEqual(warning, { fits: true, inside: true, textClear: true, replacesIcon: true }, JSON.stringify({ theme, width, warning }));
+            }
+          }
+          await browserSocket.command('Emulation.clearDeviceMetricsOverride');
           console.log('PASS: an HTTP retry failure stops after one attempt and retains its address/error with a visible Not secure warning');
 
           behavior = 'hold';
@@ -1944,6 +1969,10 @@ async function main() {
           await waitFor(() => paused, 'paused inferred HTTPS before a superseding address');
           await navigate('/navigation-challenge');
           await root.command('Fetch.disable');
+          await waitFor(async () => {
+            const tab = await current();
+            return tab?.url === `${fixtureBase}/navigation-challenge` && !tab.loading && !tab.loadError && !tab.pendingUrl;
+          }, 'superseding navigation finishes instead of matching its previously committed URL');
           await delay(500);
           assert.equal(requests.http.length, afterStop);
           assert.equal((await current()).url, `${fixtureBase}/navigation-challenge`);
@@ -2048,7 +2077,7 @@ async function main() {
         assert(snapshot.tabs.every(tab => !tab.url.includes('token=') && !tab.url.startsWith(base)));
         assert.equal(await ui(browserSocket, 'document.querySelector(".omnibox input").value'), '');
         assert.equal(modelCalls, callsBefore, 'Opening the start page must not call a model');
-        assert.equal(await ui(home, 'document.querySelector(".start-composer button").disabled'), true);
+        assert.equal(await ui(home, 'document.querySelector(".start-composer button[type=submit]").disabled'), true);
         console.log(`PASS: ${startPageOnly ? 'default launch shows the Rovuka start page' : 'explicit --url is preserved and Home opens the start page'}; trusted UI tokens stay out of tab metadata and the omnibox`);
 
         for (const theme of ['light', 'dark']) {
@@ -2136,7 +2165,7 @@ async function main() {
         await focusHome();
         await ui(home, 'document.querySelector("#start-goal").focus()');
         await home.command('Input.insertText', { text: 'compare desks from the web' });
-        await clickHome('document.querySelector(".start-composer button").click()');
+        await clickHome('document.querySelector(".start-composer button[type=submit]").click()');
         await draftReady('compare desks from the web');
         assert.equal(modelCalls, callsBefore);
         await ui(assistant, 'document.querySelector(".task-form input[type=checkbox]").click()');
@@ -3349,6 +3378,11 @@ async function main() {
       }
       assert.equal(fixtureError, undefined, fixtureError);
     };
+    if (redesignOnly) {
+      await redesignChecks();
+      await closeTestBrowser();
+      return;
+    }
     if (memoryOnly || tabsOnly) {
       await memoryChecks();
       await closeTestBrowser();
@@ -4625,7 +4659,10 @@ async function main() {
     await safetyChecks();
     await navigationChecks();
     await multitabChecks();
-    if (!liveModel && !capturedResponse && !liveWeb) await memoryChecks();
+    if (!liveModel && !capturedResponse && !liveWeb) {
+      const memoryState = await memoryChecks();
+      await redesignChecks(memoryState);
+    }
     if (process.argv.includes('--inspect')) {
       await navigate();
       await start('Verify the details for my research brief');

@@ -11,13 +11,33 @@ export interface ModelSettings {
   configured: boolean
 }
 
+export const modelSettingsChannel = 'rovuka-model-settings'
+export const memoryChangesChannel = 'rovuka-memory-changes'
+
+function notifyUiChange(name: string) {
+  const channel = new BroadcastChannel(name)
+  channel.postMessage('changed')
+  channel.close()
+  window.dispatchEvent(new Event(name))
+}
+
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(path), {
     ...init,
     headers: { ...apiHeaders(), ...init?.headers },
   })
   await checkResponse(response)
-  return (await response.json()) as T
+  const result = (await response.json()) as T
+  if (init?.method && init.method !== 'GET') {
+    if (['/api/settings', '/api/local/activate', '/api/local/restore-cloud'].includes(path)) {
+      notifyUiChange(modelSettingsChannel)
+    }
+    if (['/api/memory/config', '/api/memory/page', '/api/memory/research', '/api/memory/forget',
+      '/api/memory/clear', '/api/memory/preferences'].includes(path)) {
+      notifyUiChange(memoryChangesChannel)
+    }
+  }
+  return result
 }
 
 export async function checkResponse(response: Response): Promise<void> {

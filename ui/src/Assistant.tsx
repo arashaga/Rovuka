@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { apiHeaders, apiUrl, host, type HostEvent, type PageTextEvent } from './ipc.ts'
+import { apiHeaders, apiUrl, host, type HostEvent, type PageTextEvent, type TabInfo, type TaskDraftStart } from './ipc.ts'
 import { apiRequest, readEvents, type ModelSettings, type Provider } from './modelApi.ts'
 import LocalModels from './LocalModels.tsx'
 import TaskMode from './TaskMode.tsx'
@@ -7,6 +7,7 @@ import SafetyCenter from './SafetyCenter.tsx'
 import Reliability from './Reliability.tsx'
 import Memory from './Memory.tsx'
 import type { MemoryPreview } from './memoryTypes.ts'
+import { BrandMark, Icon } from './Icons.tsx'
 
 interface ChatMessage {
   id: string
@@ -48,6 +49,8 @@ export default function Assistant() {
   const [taskActive, setTaskActive] = useState(false)
   const [taskGoal, setTaskGoal] = useState('')
   const [taskPrepare, setTaskPrepare] = useState(false)
+  const [taskStartMode, setTaskStartMode] = useState<TaskDraftStart>('webSearch')
+  const [taskCompareOptions, setTaskCompareOptions] = useState(true)
   const [taskDraftKey, setTaskDraftKey] = useState('')
   const [taskMemory, setTaskMemory] = useState<MemoryPreview | null>(null)
   const [workspaceRequest, setWorkspaceRequest] = useState<Extract<HostEvent, { type: 'assistantWorkspace' }> | null>(null)
@@ -64,6 +67,7 @@ export default function Assistant() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [activePage, setActivePage] = useState<TabInfo | null>(null)
   const waitingForPage = useRef(new Map<string, (event: PageTextEvent) => void>())
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -95,6 +99,10 @@ export default function Assistant() {
         setExpanded(event.expanded)
         return
       }
+      if (event.type === 'tabs') {
+        setActivePage(event.tabs.find(tab => tab.id === event.active) || null)
+        return
+      }
       if (event.type !== 'pageText') return
       const complete = waitingForPage.current.get(event.requestId)
       if (complete) {
@@ -119,6 +127,8 @@ export default function Assistant() {
       setTaskMemory(null)
       setTaskGoal(workspaceRequest.goal?.trim() || '')
       setTaskPrepare(workspaceRequest.prepare === true)
+      setTaskStartMode(workspaceRequest.taskStartMode || 'webSearch')
+      setTaskCompareOptions(workspaceRequest.compareOptions ?? true)
       setTaskDraftKey(workspaceRequest.requestId)
     }
     setWorkspaceRequest(null)
@@ -150,6 +160,8 @@ export default function Assistant() {
     if (busy || taskActive) return
     setTaskGoal(goal.trim())
     setTaskPrepare(false)
+    setTaskStartMode('webSearch')
+    setTaskCompareOptions(true)
     setTaskMemory(null)
     setTaskDraftKey(crypto.randomUUID())
     setSettingsOpen(false)
@@ -238,41 +250,54 @@ export default function Assistant() {
   return (
     <main className="assistant">
       <header className="assistant-header">
-        <div>
-          <strong>✦ Rovuka</strong>
-          <span>Your web. Your model. Your choice.</span>
+        <div className="assistant-brand">
+          <BrandMark /><div><strong>Rovuka <span>Assistant</span></strong>
+            <span>Your model. Your control.</span></div>
         </div>
         <div className="assistant-header-actions">
           <button className="assistant-icon-button" title="Model settings" aria-label="Model settings" disabled={busy || taskActive} onClick={() => { host.send({ type: 'setAssistantExpanded', expanded: false }); setPanel('chat'); setSettingsOpen((open) => !open) }}>
-            ⚙
+            <Icon name="settings" />
+          </button>
+          <button className="assistant-icon-button" title={expanded ? 'Show browser' : 'Expand workspace'}
+            aria-label={expanded ? 'Show browser' : 'Expand workspace'}
+            onClick={() => host.send({ type: 'setAssistantExpanded', expanded: !expanded })}>
+            <Icon name={expanded ? 'collapse' : 'expand'} />
           </button>
           <button
             className="assistant-icon-button"
             title="Close Ask AI"
+            aria-label="Close Ask AI"
             onClick={() => host.send({ type: 'toggleAssistant' })}
           >
-            ×
+            <Icon name="close" />
           </button>
         </div>
       </header>
 
       {!expanded && <nav className="assistant-tabs" aria-label="Assistant workspace">
-        <button aria-pressed={panel === 'chat'} disabled={busy || taskActive} onClick={() => setPanel('chat')}>Ask this page</button>
-        <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setTaskGoal(''); setTaskPrepare(false); setTaskMemory(null); setTaskDraftKey(''); setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
-        <button aria-pressed={panel === 'memory'} disabled={busy || taskActive} onClick={() => { setPanel('memory'); setSettingsOpen(false) }}>Memory</button>
-        <button aria-pressed={panel === 'local'} disabled={busy || taskActive} onClick={() => setPanel('local')}>Local models</button>
-        <button aria-pressed={panel === 'safety'} disabled={busy || taskActive} onClick={() => { setPanel('safety'); setSettingsOpen(false) }}>Safety</button>
-        <button aria-pressed={panel === 'reliability'} disabled={busy || taskActive} onClick={() => { setPanel('reliability'); setSettingsOpen(false) }}>Reliability</button>
+        <div className="assistant-primary-tabs">
+          <button aria-pressed={panel === 'chat' && !settingsOpen} disabled={busy || taskActive} onClick={() => { setPanel('chat'); setSettingsOpen(false) }}>Ask this page</button>
+          <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setTaskGoal(''); setTaskPrepare(false); setTaskStartMode('webSearch'); setTaskCompareOptions(true); setTaskMemory(null); setTaskDraftKey(''); setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
+          <button aria-pressed={panel === 'memory'} disabled={busy || taskActive} onClick={() => { setPanel('memory'); setSettingsOpen(false) }}>Memory</button>
+        </div>
+        <div className="assistant-secondary-tabs">
+          <button aria-pressed={panel === 'local'} disabled={busy || taskActive} onClick={() => { setPanel('local'); setSettingsOpen(false) }}>Local models</button>
+          <button aria-pressed={panel === 'safety'} disabled={busy || taskActive} onClick={() => { setPanel('safety'); setSettingsOpen(false) }}>Safety</button>
+          <button aria-pressed={panel === 'reliability'} disabled={busy || taskActive} onClick={() => { setPanel('reliability'); setSettingsOpen(false) }}>Reliability</button>
+        </div>
       </nav>}
 
       {workspaceRequest && busy && <p className="assistant-shortcut-notice" role="status">Your start-page shortcut will open when this response finishes.</p>}
       {panel === 'task' ? (
-        <TaskMode key={taskDraftKey} onActive={setTaskActive} expanded={expanded} initialGoal={taskGoal} initialPrepare={taskPrepare} initialMemory={taskMemory} startFresh={!!taskDraftKey} />
+        <TaskMode key={taskDraftKey} onActive={setTaskActive} expanded={expanded} initialGoal={taskGoal} initialPrepare={taskPrepare}
+          initialStartMode={taskStartMode} initialCompareOptions={taskCompareOptions} initialMemory={taskMemory} startFresh={!!taskDraftKey} />
       ) : panel === 'memory' ? (
         <Memory onResearch={preview => {
           setTaskMemory(preview)
           setTaskGoal('Use the selected historical context as background. Research current facts with fresh sources and clearly mark uncertainty. Verify remembered prices; do not book or buy anything.')
           setTaskPrepare(false)
+          setTaskStartMode('webSearch')
+          setTaskCompareOptions(true)
           setTaskDraftKey(crypto.randomUUID())
           setPanel('task')
         }} />
@@ -299,7 +324,7 @@ export default function Assistant() {
               <p>Keys are saved to your system credential store; they are never written to settings files.</p>
             </div>
             <button type="button" className="assistant-icon-button" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
-              ×
+              <Icon name="close" />
             </button>
           </div>
           <label>
@@ -354,23 +379,48 @@ export default function Assistant() {
             </label>
           )}
           <p className="privacy-note">
-            When “Use current page” is on, page text is sent to the selected provider. Page text is treated as untrusted input;
-            the assistant cannot click, submit forms, or take actions in this phase.
+            When “Use current page” is on, page text is sent to your chosen model. Ask this page is read-only;
+            research and public-search preparation use separate Task mode sharing and approvals.
           </p>
           <button className="assistant-primary" type="submit">Save model settings</button>
         </form>
       ) : (
         <>
           <div className="assistant-context-note">
-            Ask this page answers questions; it does not search websites. For flights, shopping or sourced comparisons, choose Research the web.
-            {' '}Page text is shared only when “Use current page” is checked.
+            <div className="assistant-context-heading"><Icon name="page" /><strong>Current page context</strong><span>{includePage ? 'Read on send' : 'Not sharing'}</span></div>
+            <button className="assistant-context-page" title={activePage?.url || 'Open a webpage to ask about it'}
+              onClick={() => host.send({ type: activePage?.url ? 'focusContent' : 'focusOmnibox' })}>
+              <span>{activePage?.url ? activePage.title || activePage.url : 'Open a webpage to get started'}</span><Icon name="arrow" />
+            </button>
+            <p>Ask this page answers questions; it does not search websites. For flights, shopping or sourced comparisons, choose Research the web.
+              {' '}Page text is shared only when “Use current page” is checked.</p>
+            <label className="check-label page-context-toggle">
+              <input type="checkbox" checked={includePage} onChange={(event) => setIncludePage(event.target.checked)} />
+              Use current page
+            </label>
           </div>
           <div className="assistant-messages" ref={scrollRef}>
             {messages.length === 0 && (
               <div className="assistant-empty">
-                <div className="assistant-spark">✦</div>
-                <h2>Understand this page</h2>
-                <p>Ask for a summary, explanation, translation, or help finding a detail.</p>
+                <section className="assistant-suggestions" aria-labelledby="assistant-suggestions-title">
+                  <h2 id="assistant-suggestions-title"><Icon name="spark" />Suggested actions</h2>
+                  <button type="button" onClick={() => {
+                    setQuestion('Summarize the key takeaways from this page, including important caveats.')
+                    inputRef.current?.focus()
+                  }}>Summarize the key takeaways<Icon name="arrow" /></button>
+                  <button type="button" onClick={() => host.send({ type: 'openAssistant', panel: 'task',
+                    taskStartMode: 'selectedTabs', goal: 'Compare the tabs I select. Show the important differences, sources and any unknown details.' })}>
+                    Compare selected tabs<Icon name="matrix" /></button>
+                  <button type="button" onClick={() => {
+                    setQuestion('Explain the main claims on this page and identify unsupported assumptions or possible bias. Distinguish observations from interpretation.')
+                    inputRef.current?.focus()
+                  }}>Examine claims and possible bias<Icon name="arrow" /></button>
+                </section>
+                <section className="assistant-capabilities" aria-label="Task capabilities and limits">
+                  <h2><Icon name="shield" />Task capability limits</h2>
+                  <p>Research is read-only. Public-search preparation needs your approval. Approve one change or all supported actions for that task; booking, payment and signing in stay manual.</p>
+                  <button className="assistant-capability-button" type="button" onClick={() => researchWeb(question)}>Review a research draft<Icon name="arrow" /></button>
+                </section>
                 {!settings?.configured && (
                   <button className="assistant-secondary" onClick={() => setSettingsOpen(true)}>Set up a model</button>
                 )}
@@ -403,14 +453,11 @@ export default function Assistant() {
               void submit()
             }}
           >
-            <label className="check-label page-context-toggle">
-              <input type="checkbox" checked={includePage} onChange={(event) => setIncludePage(event.target.checked)} />
-              Use current page
-            </label>
             <textarea
               ref={inputRef}
               value={question}
               placeholder="Ask a question…"
+              aria-label="Ask a question"
               rows={3}
               onChange={(event) => setQuestion(event.target.value)}
               onKeyDown={(event) => {
@@ -421,13 +468,16 @@ export default function Assistant() {
               }}
             />
             <div className="composer-footer">
-              <span>{settings?.model ?? 'Configure a model in settings'}</span>
+              <button className="composer-model" type="button" title={settings?.configured ? `Configured model: ${settings.model}. Open model settings.` : 'Open model settings'}
+                disabled={busy || taskActive} onClick={() => setSettingsOpen(true)}>
+                <Icon name="model" /><span>{settings?.configured ? settings.model : 'Connect a model'}</span><Icon name="down" />
+              </button>
+              <button className="assistant-secondary research-shortcut" type="button" disabled={!question.trim() || busy || taskActive}
+                onClick={() => researchWeb(question)}>Research the web</button>
               <button className="assistant-primary" type="submit" disabled={!question.trim() || busy}>
-                {busy ? 'Working…' : 'Ask'}
+                <Icon name="send" />{busy ? 'Working…' : 'Ask'}
               </button>
             </div>
-            <button className="assistant-secondary" type="button" disabled={!question.trim() || busy || taskActive}
-              onClick={() => researchWeb(question)}>Research the web</button>
           </form>
         </>
       )}

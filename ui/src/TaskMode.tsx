@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiRequest } from './modelApi.ts'
-import { host } from './ipc.ts'
+import { host, type TaskDraftStart } from './ipc.ts'
 import { taskActive as active, type ReadTarget, type Task, type TaskStatus } from './taskTypes.ts'
 import TabSelection from './TabSelection.tsx'
 import ComparisonResults from './ComparisonResults.tsx'
@@ -16,20 +16,20 @@ const labels: Record<TaskStatus, string> = {
   needsInput: 'More details needed', noEvidence: 'No verified result',
 }
 
-export default function TaskMode({ onActive, expanded, initialGoal = '', initialPrepare = false, initialMemory = null, startFresh = false }: { onActive: (active: boolean) => void; expanded: boolean; initialGoal?: string; initialPrepare?: boolean; initialMemory?: MemoryPreview | null; startFresh?: boolean }) {
+export default function TaskMode({ onActive, expanded, initialGoal = '', initialPrepare = false, initialMemory = null, initialStartMode = 'webSearch', initialCompareOptions = true, startFresh = false }: { onActive: (active: boolean) => void; expanded: boolean; initialGoal?: string; initialPrepare?: boolean; initialMemory?: MemoryPreview | null; initialStartMode?: TaskDraftStart; initialCompareOptions?: boolean; startFresh?: boolean }) {
   const [goal, setGoal] = useState(initialGoal)
   const [sharePage, setSharePage] = useState(false)
   const [memoryPreview, setMemoryPreview] = useState<MemoryPreview | null>(initialMemory)
   const [shareMemory, setShareMemory] = useState(false)
   const [mode, setMode] = useState<'research' | 'prepare'>(initialPrepare ? 'prepare' : 'research')
-  const [startMode, setStartMode] = useState<'webSearch' | 'currentPage' | 'selectedTabs' | 'newResearchTab'>(initialPrepare ? 'currentPage' : 'webSearch')
+  const [startMode, setStartMode] = useState<'webSearch' | 'currentPage' | 'selectedTabs' | 'newResearchTab'>(initialPrepare ? 'currentPage' : initialStartMode)
   const [selectedTabs, setSelectedTabs] = useState<ReadTarget[]>([])
   const selectTabs = useCallback((tabs: ReadTarget[]) => {
     setSelectedTabs(tabs)
     setSharePage(false)
     setShareMemory(false)
   }, [])
-  const [compareOptions, setCompareOptions] = useState(true)
+  const [compareOptions, setCompareOptions] = useState(initialCompareOptions)
   const [task, setTask] = useState<Task | null>(null)
   const [savedFindings, setSavedFindings] = useState<Task | null>(null)
   const [showSavedFindings, setShowSavedFindings] = useState(false)

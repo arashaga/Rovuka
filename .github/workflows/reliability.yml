@@ -65,6 +65,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --check .\scripts\test-memory.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check .\scripts\test-redesign.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Serial Rust workspace tests
         run: cargo test --locked --workspace -- --test-threads=1
       - name: Build the standard native browser
@@ -85,6 +87,12 @@ jobs:
       - name: Local memory, restart and tab native regressions
         run: |
           node .\scripts\test-agent.cjs --memory-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Reference redesign and start-page native regressions
+        run: |
+          node .\scripts\test-agent.cjs --redesign-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node .\scripts\test-agent.cjs --start-page-only
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload metadata-only native outcomes
         if: always()

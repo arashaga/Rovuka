@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { host, type DownloadInfo, type TabInfo, type TabId } from './ipc.ts'
+import { BrandMark, Icon } from './Icons.tsx'
+import useModelStatus from './useModelStatus.ts'
 
 function displayUrl(url: string): string {
   return url === 'about:blank' ? '' : url
@@ -8,7 +10,7 @@ function displayUrl(url: string): string {
 function Favicon({ tab }: { tab: TabInfo }) {
   const [broken, setBroken] = useState(false)
   if (tab.loading) return <span className="spinner" />
-  if (!tab.favicon || broken) return <span className="favicon-placeholder" />
+  if (!tab.favicon || broken) return <Icon name={tab.url ? 'globe' : 'spark'} className="favicon-placeholder" />
   return <img className="favicon" src={tab.favicon} onError={() => setBroken(true)} alt="" />
 }
 
@@ -22,6 +24,7 @@ export default function App() {
   const inputRef = useRef<HTMLInputElement>(null)
   const tabListRef = useRef<HTMLDivElement>(null)
   const [tabOverflow, setTabOverflow] = useState(false)
+  const { settings, error: modelError } = useModelStatus()
 
   const activeTab = tabs.find((t) => t.id === active)
   const address = activeTab?.pendingUrl || activeTab?.loadError?.url || activeTab?.url || ''
@@ -111,7 +114,7 @@ export default function App() {
     <div className="chrome">
       <div className="tabstrip">
         {tabOverflow && <button className="tab-scroll" title="Scroll tabs left" aria-label="Scroll tabs left"
-          onClick={() => tabListRef.current?.scrollBy({ left: -240, behavior: 'smooth' })}>‹</button>}
+          onClick={() => tabListRef.current?.scrollBy({ left: -240, behavior: 'smooth' })}><Icon name="back" /></button>}
         <div className="browser-tabs" ref={tabListRef} role="tablist" aria-label="Browser tabs">
         {tabs.map((t) => (
           <div
@@ -138,16 +141,27 @@ export default function App() {
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => host.send({ type: 'closeTab', tabId: t.id })}
             >
-              ×
+              <Icon name="close" />
             </button>
           </div>
         ))}
         </div>
         {tabOverflow && <button className="tab-scroll" title="Scroll tabs right" aria-label="Scroll tabs right"
-          onClick={() => tabListRef.current?.scrollBy({ left: 240, behavior: 'smooth' })}>›</button>}
-        <button className="new-tab" title="New tab (Ctrl+T)" onClick={() => host.send({ type: 'newTab' })}>
-          +
+          onClick={() => tabListRef.current?.scrollBy({ left: 240, behavior: 'smooth' })}><Icon name="forward" /></button>}
+        <button className="new-tab" title="New tab (Ctrl+T)" aria-label="New tab" onClick={() => host.send({ type: 'newTab' })}>
+          <Icon name="plus" />
         </button>
+        <span className="chrome-local" title="The browser runs on your computer. Your chosen model may be local or remote.">
+          <Icon name="shield" />Local browser
+        </span>
+        <button className={`chrome-model ${modelError ? 'unavailable' : ''}`}
+          title={modelError || (settings?.configured ? `Configured model: ${settings.model}. Open model settings.` : 'Connect your model API or a local runtime.')}
+          onClick={() => host.send({ type: 'openAssistant', panel: 'settings' })}>
+          <Icon name="model" /><span>{modelError ? 'Model unavailable' : settings?.configured ? settings.model : 'Connect model'}</span>
+          <Icon name="down" />
+        </button>
+        <button className="chrome-brand" title="Open model settings" aria-label="Open model settings"
+          onClick={() => host.send({ type: 'openAssistant', panel: 'settings' })}><BrandMark /></button>
       </div>
 
       <div className="toolbar">
@@ -157,7 +171,7 @@ export default function App() {
           disabled={!activeTab?.canGoBack}
           onClick={() => host.send({ type: 'back' })}
         >
-          ←
+          <Icon name="back" />
         </button>
         <button
           className="nav"
@@ -165,32 +179,33 @@ export default function App() {
           disabled={!activeTab?.canGoForward}
           onClick={() => host.send({ type: 'forward' })}
         >
-          →
+          <Icon name="forward" />
         </button>
         {activeTab?.loading ? (
           <button className="nav" title="Stop" onClick={() => host.send({ type: 'stop' })}>
-            ✕
+            <Icon name="close" />
           </button>
         ) : (
           <button className="nav" title="Reload (F5)" onClick={() => host.send({ type: 'reload' })}>
-            ↻
+            <Icon name="reload" />
           </button>
         )}
 
         <button className="nav home-nav" title="Open Rovuka start page in a new tab" aria-label="Open Rovuka start page"
           onClick={() => host.send({ type: 'newTab' })}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-            <path d="m3 10 9-7 9 7M5 9v11h5v-6h4v6h5V9" strokeLinejoin="round" strokeLinecap="round" />
-          </svg>
+          <Icon name="home" />
         </button>
 
         {findingsOpen && <span className="workspace-indicator" role="status">Research workspace</span>}
         <div className="omnibox">
+          <Icon name={parsedAddress?.protocol === 'https:' && !activeTab?.loading && !activeTab?.loadError && !activeTab?.pendingUrl
+            ? 'lock' : 'globe'} className="omnibox-icon" />
           {externalHttp && <span className="connection-state" title="This address uses unencrypted HTTP. Do not enter private information.">Not secure</span>}
           <input
             ref={inputRef}
             value={omnibox}
             placeholder="Search or enter address"
+            aria-label="Search or enter address"
             spellCheck={false}
             onFocus={(e) => {
               setEditing(true)
@@ -215,7 +230,7 @@ export default function App() {
 
         {latest && (
           <div className={`download ${latest.state}`} title={latest.fullPath}>
-            ⤓ <span className="dl-name">{latest.fileName || latest.url}</span>
+            <Icon name="download" /><span className="dl-name">{latest.fileName || latest.url}</span>
             <span className="dl-state">
               {latest.state === 'inProgress' ? `${Math.max(0, latest.percent)}%` : latest.state}
               {activeDownloads > 1 && ` (+${activeDownloads - 1})`}
@@ -224,7 +239,7 @@ export default function App() {
         )}
 
         <button className="ask-ai" title="Ask about this page" onClick={() => host.send({ type: 'toggleAssistant' })}>
-          ✦ Ask AI
+          <Icon name="spark" /><span>Ask AI</span>
         </button>
       </div>
     </div>

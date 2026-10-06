@@ -67,8 +67,9 @@ without migration. This rename does not create an installer.
 ## Rovuka start page
 
 Launch without `--url` to see the welcome/new-tab workspace. It includes a
-top **What's new** strip, an illustrated overview, a task composer, shopping,
-travel and research examples, feature shortcuts and an explanation of current
+top **What's new** strip, an illustrated overview, a full-width **Intent Studio**,
+live local-memory/open-page workspace cards, shopping, travel and research
+examples, feature shortcuts and an explanation of current
 safety boundaries. Illustrations are local SVGs; there are no remote artwork,
 news-feed requests or model calls just to display the page. The update strip
 describes this build's shipped features, not a remotely fetched feed.
@@ -77,6 +78,12 @@ describes this build's shipped features, not a remotely fetched feed.
   Task mode. Opening a draft does not start research, select page-sharing
   consent, approve navigation or replace the current page. Choose/configure a
   model, review the draft, explicitly allow sharing and press **Start task**.
+- The studio's modes prepare different drafts: **Intelligent synthesis**
+  requests a sourced brief, **Compare options** requests actionable options,
+  **Prepare a search** selects public-search preparation, and **Compare open
+  tabs** opens the explicit native tab picker. The last option selects no tabs
+  and grants no sharing permission. Preparation needs a real public search page
+  before starting; it is not a booking or sign-in workflow.
 - **Connect your model**, **Explore local models**, **Open Ask AI**,
   **Open Memory** and **Review safety** open their assistant workspaces.
   **Just browse** focuses the address bar; ordinary browsing and local memory
@@ -96,10 +103,36 @@ The start page is a separate trusted native BrowserView above a blank content
 tab, not a token-bearing website in tab history. Its authenticated UI URL stays
 out of the omnibox, tab snapshots and model-facing observations. Page Q&A
 explicitly refuses to share it: open a real webpage first. Themes, responsive
-320px layouts, focusable controls and reduced-motion artwork use the existing
-Clawpilot design. What's new introduces local memory, explicit context sharing,
-selected-tab comparisons and task-wide or step-by-step approval. Runtimes,
+320px surface layouts, focusable controls and reduced-motion artwork follow
+the supplied warm-canvas/rose design. What's new describes the shipped redesign,
+local memory and explicit control, not a fetched news feed. Runtimes,
 booking/non-search submission automation and installers are still not bundled.
+
+### Reference-based browser design
+
+The real CEF surfaces use dark browser chrome in both themes, a warm light
+canvas, rose accents, bordered tabs, locally rendered SVG icons and an upright
+research illustration. Chrome remains **84 DIP** (38px tabs + 46px toolbar);
+the assistant's preferred width is **384 DIP**. Native Windows window controls
+remain native rather than imitating decorative macOS traffic lights.
+
+The assistant separates **Ask this page / Task mode / Memory** into a primary
+segmented row and **Local models / Safety / Reliability** into secondary chips.
+Page context names the current page without reading it; **Use current page**
+still determines sharing when a question is sent. Suggested summaries and
+claims analysis only prefill editable questions. The comparison suggestion
+opens an unselected read-only tab draft. The bottom composer keeps question
+submission, **Research the web** and the real configured-model selector.
+
+The chrome model badge shows the saved configuration, not invented latency,
+hardware activity or a successful inference check. Successful UI settings,
+local/cloud model switches and memory mutations send same-origin **change
+hints only**; other trusted surfaces re-read their authenticated native
+metadata. No keys, endpoints, page text or saved context enter those hints.
+Workspace cards show real counts/capture state or an explicit native error,
+not fabricated saved boards, offers or monitoring activity. No PDF drop
+workflow, biometric authorization, zero-telemetry guarantee or isolated
+read-only browser sandbox is claimed.
 
 ## Ordinary browsing and navigation errors
 
@@ -1194,6 +1227,23 @@ screenshots, logs and credentials must never be uploaded as CI artifacts.
 The full default suite includes these groups after the baseline checks; focused
 multi-tab and live-model runners do not implicitly run memory fixtures.
 Windows CI runs the focused memory suite separately after multi-tab checks.
+
+For reference-design and cross-surface UI coverage:
+
+```powershell
+node .\scripts\test-agent.cjs --redesign-only
+```
+
+Eight native groups check the actual 84/384-DIP geometry, 1280/640/320px
+light/dark surfaces, local artwork/assets, full-width studio, real metadata,
+all six workspaces, native keyboard intent navigation and four exact,
+consent-free draft handoffs. Trusted typing/clicks verify suggestions, live
+memory status and configured-model changes without automatic model calls.
+An explicit mock task verifies the narrow **Approve all for this task**,
+revoke and Stop flow. `AIB_TEST_REDESIGN_SCREENSHOT=<absolute PNG path>`
+optionally saves local per-surface screenshots; none are CI artifacts.
+The full default local suite includes these checks after memory, and Windows
+CI runs them plus the original start-page suite independently.
 
 An explicitly opted-in live check uses your configured model and public
 Rust/Python Wikipedia articles with the exact manual-test prompt above:
