@@ -41,6 +41,9 @@ approval input for page input. Revalidation logs use fixed metadata reason
 codes, never input keys, coordinates or field-value dumps. Hotel approval tests
 must include trusted pointer clicks and preselected destinations, not only
 synthetic element.click() calls.
+Trusted fixture clicks must wait for an enabled, in-viewport hit target with
+stable geometry before dispatching pointer input; approval smooth scrolling and
+responsive reflow must not redirect clicks to a different action.
 
 Hotels.com preparation uses the native `hotel_search.rs` contract and typed
 `hotelSearch` payload, not arbitrary form submission. Keep the native scope
@@ -106,7 +109,9 @@ Run `--multitab-only` and the full native suite after rebuilding, including
 trusted selection/approval, unselected/form privacy, copy denial, reload/close
 through model latency, revoke/Stop, duplicates, malformed evidence/citations,
 all-Unknowns, retained comparison and 320px light/dark layout. GUI suites must
-run sequentially. CI remains local/mock-only with no private artifacts.
+run sequentially. Restore and test the compact 1008x605 viewport after narrow
+layout emulation, including trusted sharing consent. CI remains local/mock-only
+with no private artifacts.
 
 Privacy/audit changes must pass `node .\scripts\test-agent.cjs --safety-only`
 after rebuilding. Native fixtures isolate `AIB_AUDIT_DIR` from the real history.

@@ -1053,16 +1053,29 @@ async function main() {
       };
       await waitFor(() => evaluate(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).disabled`),
         `trusted clickable control: ${selector}`);
+      let previous, stableSince = 0;
+      const point = await waitFor(async () => {
+        const next = await evaluate(`(() => {
+          const button=document.querySelector(${JSON.stringify(selector)});
+          if(!button || button.disabled) return null;
+          button.scrollIntoView({block:'center',behavior:'instant'});
+          const box=button.getBoundingClientRect();
+          const x=box.left+box.width/2,y=box.top+box.height/2;
+          const hit=document.elementFromPoint(x,y);
+          return box.width>0 && box.height>0 && x>=0 && x<innerWidth && y>=0 && y<innerHeight &&
+            (hit===button || button.contains(hit)) ? {x,y,width:box.width,height:box.height,viewportWidth:innerWidth,viewportHeight:innerHeight} : null;
+        })()`);
+        if (!next || JSON.stringify(next) !== JSON.stringify(previous)) {
+          previous = next;
+          stableSince = Date.now();
+          return null;
+        }
+        return Date.now() - stableSince >= 200 ? { x: next.x, y: next.y } : null;
+      }, `trusted pointer target visible and stable after viewport/scroll settlement: ${selector}`);
       await evaluate(`(() => {
-        const button=document.querySelector(${JSON.stringify(selector)});
-        button.scrollIntoView({block:'center',behavior:'instant'});
         window.__agentTestApprovalTrusted=false;
-        button.addEventListener('click',event=>{window.__agentTestApprovalTrusted=event.isTrusted},{once:true});
-      })()`);
-      await delay(200);
-      const point = await evaluate(`(() => {
-        const box=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
-        return {x:box.left+box.width/2,y:box.top+box.height/2};
+        document.querySelector(${JSON.stringify(selector)}).addEventListener('click',
+          event=>{window.__agentTestApprovalTrusted=event.isTrusted},{once:true});
       })()`);
       await connection.command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
       await connection.command('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
@@ -1176,6 +1189,7 @@ async function main() {
         await waitFor(() => evaluate(assistant, `document.querySelector("#task-goal")?.value===${JSON.stringify(goal)} && !!document.querySelector(".task-form")`), 'fresh comparison draft');
         await send({ type: 'setAssistantExpanded', expanded: true });
         await waitFor(() => evaluate(assistant, 'innerWidth>700 && !!document.querySelector(".task-expanded")'), 'expanded tab-selection workspace');
+        await assistant.command('Emulation.setDeviceMetricsOverride', { width: 1008, height: 605, deviceScaleFactor: 1, mobile: false });
         await evaluate(assistant, 'document.querySelector("#task-start").value="selectedTabs";document.querySelector("#task-start").dispatchEvent(new Event("change",{bubbles:true}))');
         await waitFor(() => evaluate(assistant, '!!document.querySelector(".tab-selection") && !document.querySelector(".tab-selection").disabled'), 'explicit tab selector');
         assert.equal(await evaluate(assistant, 'document.querySelectorAll(".tab-selection input:checked").length'), 0);
@@ -1191,8 +1205,10 @@ async function main() {
           await evaluate(assistant, `document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
           assert.equal(await evaluate(assistant, 'document.documentElement.scrollWidth<=innerWidth && document.querySelector(".task-mode").scrollWidth<=document.querySelector(".task-mode").clientWidth'), true);
         }
-        await assistant.command('Emulation.clearDeviceMetricsOverride');
+        await assistant.command('Emulation.setDeviceMetricsOverride', { width: 1008, height: 605, deviceScaleFactor: 1, mobile: false });
+        await waitFor(() => evaluate(assistant, 'innerWidth===1008 && innerHeight===605'), 'compact viewport restored after narrow theme checks');
         await trustedClick(assistant, '.task-form > .check-label input');
+        await assistant.command('Emulation.clearDeviceMetricsOverride');
         await fresh();
         await trustedClick(assistant, '.task-form button[type="submit"]');
         let view = await pending();
