@@ -89,6 +89,8 @@ async function main() {
   const liveBrowsing = process.argv.includes('--live-browsing');
   const hotelOnly = process.argv.includes('--hotel-only');
   const multitabOnly = process.argv.includes('--multitab-only') || liveMultitab;
+  const memoryOnly = process.argv.includes('--memory-only');
+  const tabsOnly = process.argv.includes('--tabs-only');
   const liveHotel = process.argv.includes('--live-hotel');
   const approveAllHotel = process.argv.includes('--approve-all-hotel');
   const fixtureParty = liveModel && process.argv.includes('--family')
@@ -111,6 +113,10 @@ async function main() {
   assert(!approveAllHotel || liveHotel, '--approve-all-hotel requires --hotel-only --live-hotel');
   assert(!multitabOnly || ((!liveModel || liveMultitab) && !liveWeb && captureArgument < 0 && !evalOnly && !safetyOnly && !shutdownOnly && !startPageOnly && !operatorOnly && !navigationOnly && !hotelOnly),
     'Multi-tab checks require their own mode; live websites/model calls require explicit --live-multitab');
+  assert(!(memoryOnly || tabsOnly) || (!liveModel && captureArgument < 0 && !evalOnly && !safetyOnly && !shutdownOnly
+    && !startPageOnly && !operatorOnly && !navigationOnly && !hotelOnly && !multitabOnly),
+  'Memory checks require their own local/mock-only mode');
+  assert(!(memoryOnly && tabsOnly), 'Choose either memory or tabs-only checks');
   const privacyToken = ['sk', 'simulatedfixture'.repeat(3)].join('-');
   const privacyCard = ['4111', '1111', '1111', '1111'].join(' ');
   const privateValues = [privacyToken, privacyCard, 'fixturePagePassword', 'fixtureTitlePassword',
@@ -131,6 +137,7 @@ async function main() {
   let hotelTamperDisplay = false;
   let comparisonCalls = 0, comparisonReaderActive = 0, comparisonReaderPeak = 0, comparisonReaderDelay = 300;
   const comparisonReaderInputs = [];
+  const sharedContextInputs = [];
   let activityModelRelease, activityModelWaiting = false;
   // Structured output: every agent decision request carries the strict schema until the
   // fallback scenario makes the fixture reject response_format (as some endpoints do).
@@ -149,6 +156,20 @@ async function main() {
       assert.equal(req.headers.authorization, undefined, 'Cloud key must not reach fixtures');
       const route = req.url.split('?')[0];
       hits.set(route, (hits.get(route) || 0) + 1);
+      if (route.startsWith('/memory/')) {
+        const name = route.split('/').at(-1);
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html><title>Memory public ${name}</title><h1>Borealis memory reference ${name}</h1>
+          <p>BorealisKeyword is a public reference about ownership and source-grounded research.</p>
+          <p>An option costs $42, includes breakfast.</p>
+          <p>password=memoryPrivatePlain ${privacyToken}</p>
+          <input aria-label="Private input" value="MEMORY_PRIVATE_INPUT"><textarea>MEMORY_PRIVATE_TEXTAREA</textarea>
+          <select><option selected>MEMORY_PRIVATE_SELECT</option></select><div contenteditable>MEMORY_PRIVATE_EDITABLE</div>
+          <div hidden>MEMORY_PRIVATE_HIDDEN</div>
+          ${name === 'slow' ? '<iframe src="/slow-frame"></iframe>' : ''}
+          <script>window.fixtureChanges=0;for(const event of ['click','input','change'])document.addEventListener(event,()=>window.fixtureChanges++)</script>`);
+        return;
+      }
       if (route.startsWith('/compare/')) {
         const facts = {
           a: ['Alpha', 'Total USD 240.', 'Parking: free.', 'Cancellation: free until November 10.'],
@@ -286,6 +307,7 @@ async function main() {
           res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: decision } }] })}\n\ndata: [DONE]\n\n`);
         };
         if (input?.role === 'quarantinedReader' || input?.role === 'quarantinedReaderRecovery') {
+          assert(!input.savedContext, 'Historical memory must not be forwarded to a source evidence reader');
           readerCalls++;
           const recovering = input.role === 'quarantinedReaderRecovery';
           assert(system.includes('NO browser tools') && system.includes('UNTRUSTED DATA'), 'Reader must have no tools or authority');
@@ -346,6 +368,10 @@ async function main() {
           return;
         }
         modelCalls++;
+        if (input?.savedContext) {
+          assert(system.includes('historical, untrusted data') && system.includes('permissions'));
+          sharedContextInputs.push(input);
+        }
         if (Array.isArray(input?.sources) && input?.capturedAt) {
           comparisonCalls++;
           if (plainFallback && request.response_format) {
@@ -945,7 +971,8 @@ async function main() {
     assert(path.isAbsolute(browserExecutable), 'Browser test executable override must be an absolute path');
     const childEnv = { ...process.env, AIB_AGENT_TEST_SEARCH_URL: `${fixtureBase}/search`, AIB_AGENT_TEST_TRAVEL_URL: fixtureBase,
       AIB_OPERATOR_TEST_HOTEL_ORIGIN: fixtureBase, AIB_LOG_DIR: temp, AIB_AUDIT_DIR: path.join(temp, 'Audit'),
-      AIB_EVALUATION_DIR: path.join(temp, 'Evaluations'), AIB_EVALUATION_FIXTURE: liveModel ? '0' : '1' };
+      AIB_EVALUATION_DIR: path.join(temp, 'Evaluations'), AIB_EVALUATION_FIXTURE: liveModel ? '0' : '1',
+      AIB_MEMORY_DIR: path.join(temp, 'Memory') };
     if (liveWeb) { delete childEnv.AIB_AGENT_TEST_SEARCH_URL; delete childEnv.AIB_AGENT_TEST_TRAVEL_URL; }
     if (liveModel) delete childEnv.AIB_MODEL_SETTINGS_FILE;
     else childEnv.AIB_MODEL_SETTINGS_FILE = settings;
@@ -963,7 +990,7 @@ async function main() {
       const cdpMatch = plain.match(/ws:\/\/127\.0\.0\.1:(\d+)\/devtools\/browser/);
       if (uiMatch && cdpMatch) { base = `http://127.0.0.1:${uiMatch[1]}`; nativePort = Number(cdpMatch[1]); return true; }
     }, 'browser servers');
-    const chrome = await waitFor(async () => {
+    let chrome = await waitFor(async () => {
       const tabs = await (await fetch(`http://127.0.0.1:${nativePort}/json/list`)).json();
       return tabs.find(tab => tab.type === 'page' && tab.url.startsWith(base) && !new URL(tab.url).searchParams.has('surface'));
     }, 'trusted chrome');
@@ -993,9 +1020,9 @@ async function main() {
       })`, awaitPromise: true, returnByValue: true,
     });
     assert(!connected.exceptionDetails, JSON.stringify(connected.exceptionDetails));
-    const rpc = async (route, body, expected = 200, headers = {}) => {
+    const rpc = async (route, body, expected = 200, headers = {}, method) => {
       const response = await fetch(`${base}${route}`, {
-        method: body === undefined ? 'GET' : 'POST',
+        method: method || (body === undefined ? 'GET' : 'POST'),
         headers: { 'Content-Type': 'application/json', 'x-aib-token': token, ...headers },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
@@ -1130,6 +1157,67 @@ async function main() {
       await waitFor(() => child.exitCode !== null || child.signalCode !== null, 'clean browser shutdown', 30000);
       assert.equal(child.exitCode, 0, `Test browser shutdown failed: ${child.signalCode || child.exitCode}`);
     };
+    const restartBrowser = async (beforeLaunch) => {
+      await closeTestBrowser();
+      browserSocket?.close();
+      cdpSocket?.close();
+      await delay(150);
+      if (beforeLaunch) await beforeLaunch();
+      logs = '';
+      child = spawn(browserExecutable,
+        ['--graphics=software', `--remote-debugging-port=${debugPort}`, `--profile-dir=${path.join(temp, 'Profile')}`, `--url=${fixtureBase}/start`],
+        { cwd: root, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+      child.stdout.on('data', chunk => { logs += chunk; });
+      child.stderr.on('data', chunk => { logs += chunk; });
+      child.on('exit', (code, signal) => { logs += `Test browser exit: code=${code}, signal=${signal}\n`; });
+      await waitFor(() => {
+        assert(child.exitCode === null, `Restarted browser exited early:\n${logs}`);
+        const plain = logs.replace(/\u001b\[[0-9;]*m/g, '');
+        const uiMatch = plain.match(/UI server listening.*?port[=\s]+(\d+)/);
+        const cdpMatch = plain.match(/ws:\/\/127\.0\.0\.1:(\d+)\/devtools\/browser/);
+        if (uiMatch && cdpMatch) { base = `http://127.0.0.1:${uiMatch[1]}`; nativePort = Number(cdpMatch[1]); return true; }
+      }, 'restarted native browser servers');
+      chrome = await waitFor(async () => {
+        const pages = await (await fetch(`http://127.0.0.1:${nativePort}/json/list`)).json();
+        return pages.find(page => page.type === 'page' && page.url.startsWith(base) && !new URL(page.url).searchParams.has('surface'));
+      }, 'restarted trusted chrome');
+      token = new URL(chrome.url).searchParams.get('token');
+      browserSocket = await connectCdp(chrome.webSocketDebuggerUrl);
+      await waitFor(async () => {
+        const ready = await browserSocket.command('Runtime.evaluate', {
+          expression: `location.origin===${JSON.stringify(base)} && document.readyState==="complete"`, returnByValue: true,
+        });
+        return ready.result?.value === true;
+      }, 'restarted trusted UI document committed before authenticated IPC');
+      const connected = await browserSocket.command('Runtime.evaluate', {
+        expression: `new Promise((resolve,reject)=>{
+          window.__agentTestConnection=new WebSocket(${JSON.stringify(`${base.replace('http:', 'ws:')}/ws?token=${token}`)});
+          window.__agentTestConnection.onopen=()=>resolve(true);
+          window.__agentTestConnection.onerror=()=>reject(new Error('Restarted IPC connection failed'));
+          window.__agentTestConnection.onmessage=event=>{const value=JSON.parse(event.data);if(value.type==='tabs')window.__agentTestTabs=value};
+        })`, awaitPromise: true, returnByValue: true,
+      });
+      assert(!connected.exceptionDetails, JSON.stringify(connected.exceptionDetails));
+      await waitFor(tabSnapshot, 'restarted native tab snapshot');
+    };
+    const memoryChecks = () => require(path.join(__dirname, 'test-memory.cjs'))({
+      rpc, navigate, start, approve, terminal, pending, tabSnapshot, trustedClick, restartBrowser, tabsOnly,
+      fixtureBase, memoryFile: path.join(temp, 'Memory', 'memory.sqlite3'),
+      memoryDirectory: path.join(temp, 'Memory'), auditDirectory: path.join(temp, 'Audit'),
+      privateValues: [...privateValues, 'memoryPrivatePlain', 'MEMORY_PRIVATE_INPUT', 'MEMORY_PRIVATE_TEXTAREA',
+        'MEMORY_PRIVATE_SELECT', 'MEMORY_PRIVATE_EDITABLE', 'MEMORY_PRIVATE_HIDDEN',
+        'COMPARISON_PRIVATE_INPUT', 'COMPARISON_PRIVATE_PASSWORD', 'UNSELECTED_PRIVATE_MARKER'],
+      stats: () => ({ modelCalls, readerCalls, sharedContextInputs: [...sharedContextInputs] }),
+      chrome: () => browserSocket,
+      connect: async surface => {
+        const pages = await (await fetch(`http://127.0.0.1:${nativePort}/json/list`)).json();
+        const target = pages.find(page => page.url.startsWith(base) && new URL(page.url).searchParams.get('surface') === surface);
+        return target && connectCdp(target.webSocketDebuggerUrl);
+      },
+      send: command => browserSocket.command('Runtime.evaluate', {
+        expression: `window.__agentTestConnection.send(${JSON.stringify(JSON.stringify(command))})`,
+      }),
+    });
     const multitabChecks = async () => {
       const initial = await waitFor(tabSnapshot, 'multi-tab initial state');
       const existingIds = new Set(initial.tabs.map(tab => tab.id));
@@ -2021,7 +2109,7 @@ async function main() {
         await clickHome('Array.from(document.querySelectorAll(".start-features button")).find(button=>button.textContent.includes("Explore local models")).click()');
         await waitFor(() => ui(assistant, '!!document.querySelector(".local-models")'), 'local models shortcut');
         await clickHome('document.querySelector(".start-updates button").click()');
-        await waitFor(() => ui(assistant, '!!document.querySelector(".safety-center")'), 'What is new Safety shortcut');
+        await waitFor(() => ui(assistant, '!!document.querySelector(".memory-panel") && !!document.querySelector(".memory-search")'), 'What is new local Memory shortcut');
         await clickHome('document.querySelector(".start-safety button").click()');
         await waitFor(() => ui(assistant, '!!document.querySelector(".safety-center")'), 'safety overview shortcut');
         assert.equal(modelCalls, callsBefore);
@@ -3261,6 +3349,11 @@ async function main() {
       }
       assert.equal(fixtureError, undefined, fixtureError);
     };
+    if (memoryOnly || tabsOnly) {
+      await memoryChecks();
+      await closeTestBrowser();
+      return;
+    }
     if (evalOnly) {
       await reliabilityChecks();
       await closeTestBrowser();
@@ -4532,6 +4625,7 @@ async function main() {
     await safetyChecks();
     await navigationChecks();
     await multitabChecks();
+    if (!liveModel && !capturedResponse && !liveWeb) await memoryChecks();
     if (process.argv.includes('--inspect')) {
       await navigate();
       await start('Verify the details for my research brief');

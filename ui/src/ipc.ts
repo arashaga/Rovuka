@@ -1,12 +1,12 @@
 // Mirror of crates/aib-ipc/src/lib.rs. Keep in sync.
 
 export type TabId = number
-export type AssistantPanel = 'chat' | 'task' | 'local' | 'safety' | 'settings'
+export type AssistantPanel = 'chat' | 'task' | 'local' | 'safety' | 'settings' | 'memory'
 
 export type Command =
   | { type: 'newTab'; url?: string }
   | { type: 'closeTab'; tabId: TabId }
-  | { type: 'activateTab'; tabId: TabId }
+  | { type: 'activateTab'; tabId: TabId; keepChromeFocus?: boolean }
   | { type: 'navigate'; tabId?: TabId; input: string }
   | { type: 'back'; tabId?: TabId }
   | { type: 'forward'; tabId?: TabId }
@@ -81,6 +81,7 @@ class HostConnection {
   private listeners = new Set<Listener>()
   private queue: string[] = []
   private retry = 250
+  private lastTabs: Extract<HostEvent, { type: 'tabs' }> | null = null
 
   constructor() {
     this.connect()
@@ -96,6 +97,7 @@ class HostConnection {
     ws.onmessage = (m) => {
       try {
         const e = JSON.parse(m.data as string) as HostEvent
+        if (e.type === 'tabs') this.lastTabs = e
         this.listeners.forEach((l) => l(e))
       } catch (err) {
         console.error('bad host event', err)
@@ -116,6 +118,7 @@ class HostConnection {
 
   subscribe(l: Listener): () => void {
     this.listeners.add(l)
+    if (this.lastTabs) l(this.lastTabs)
     return () => this.listeners.delete(l)
   }
 }

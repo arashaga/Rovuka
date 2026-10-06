@@ -22,6 +22,11 @@ local-runtimes.json
 /task-audit/
 /model-evaluations/
 /audit-exports/
+/browser-memory/
+memory.sqlite3
+memory.sqlite3-journal
+memory.sqlite3-wal
+memory.sqlite3-shm
 /playwright-report/
 *.pem
 *.key

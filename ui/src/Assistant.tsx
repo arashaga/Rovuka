@@ -5,6 +5,8 @@ import LocalModels from './LocalModels.tsx'
 import TaskMode from './TaskMode.tsx'
 import SafetyCenter from './SafetyCenter.tsx'
 import Reliability from './Reliability.tsx'
+import Memory from './Memory.tsx'
+import type { MemoryPreview } from './memoryTypes.ts'
 
 interface ChatMessage {
   id: string
@@ -42,11 +44,12 @@ const defaults: Record<Provider, Pick<ModelSettings, 'baseUrl' | 'model' | 'apiV
 export default function Assistant() {
   const [settings, setSettings] = useState<ModelSettings | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [panel, setPanel] = useState<'chat' | 'local' | 'task' | 'safety' | 'reliability'>('chat')
+  const [panel, setPanel] = useState<'chat' | 'local' | 'task' | 'safety' | 'reliability' | 'memory'>('chat')
   const [taskActive, setTaskActive] = useState(false)
   const [taskGoal, setTaskGoal] = useState('')
   const [taskPrepare, setTaskPrepare] = useState(false)
   const [taskDraftKey, setTaskDraftKey] = useState('')
+  const [taskMemory, setTaskMemory] = useState<MemoryPreview | null>(null)
   const [workspaceRequest, setWorkspaceRequest] = useState<Extract<HostEvent, { type: 'assistantWorkspace' }> | null>(null)
   const lastWorkspaceRequest = useRef('')
   const [expanded, setExpanded] = useState(false)
@@ -113,6 +116,7 @@ export default function Assistant() {
     setTaskActive(false)
     setError('')
     if (workspaceRequest.panel === 'task') {
+      setTaskMemory(null)
       setTaskGoal(workspaceRequest.goal?.trim() || '')
       setTaskPrepare(workspaceRequest.prepare === true)
       setTaskDraftKey(workspaceRequest.requestId)
@@ -146,6 +150,7 @@ export default function Assistant() {
     if (busy || taskActive) return
     setTaskGoal(goal.trim())
     setTaskPrepare(false)
+    setTaskMemory(null)
     setTaskDraftKey(crypto.randomUUID())
     setSettingsOpen(false)
     host.send({ type: 'setAssistantExpanded', expanded: false })
@@ -253,7 +258,8 @@ export default function Assistant() {
 
       {!expanded && <nav className="assistant-tabs" aria-label="Assistant workspace">
         <button aria-pressed={panel === 'chat'} disabled={busy || taskActive} onClick={() => setPanel('chat')}>Ask this page</button>
-        <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setTaskGoal(''); setTaskPrepare(false); setTaskDraftKey(''); setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
+        <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setTaskGoal(''); setTaskPrepare(false); setTaskMemory(null); setTaskDraftKey(''); setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
+        <button aria-pressed={panel === 'memory'} disabled={busy || taskActive} onClick={() => { setPanel('memory'); setSettingsOpen(false) }}>Memory</button>
         <button aria-pressed={panel === 'local'} disabled={busy || taskActive} onClick={() => setPanel('local')}>Local models</button>
         <button aria-pressed={panel === 'safety'} disabled={busy || taskActive} onClick={() => { setPanel('safety'); setSettingsOpen(false) }}>Safety</button>
         <button aria-pressed={panel === 'reliability'} disabled={busy || taskActive} onClick={() => { setPanel('reliability'); setSettingsOpen(false) }}>Reliability</button>
@@ -261,7 +267,15 @@ export default function Assistant() {
 
       {workspaceRequest && busy && <p className="assistant-shortcut-notice" role="status">Your start-page shortcut will open when this response finishes.</p>}
       {panel === 'task' ? (
-        <TaskMode key={taskDraftKey} onActive={setTaskActive} expanded={expanded} initialGoal={taskGoal} initialPrepare={taskPrepare} startFresh={!!taskDraftKey} />
+        <TaskMode key={taskDraftKey} onActive={setTaskActive} expanded={expanded} initialGoal={taskGoal} initialPrepare={taskPrepare} initialMemory={taskMemory} startFresh={!!taskDraftKey} />
+      ) : panel === 'memory' ? (
+        <Memory onResearch={preview => {
+          setTaskMemory(preview)
+          setTaskGoal('Use the selected historical context as background. Research current facts with fresh sources and clearly mark uncertainty. Verify remembered prices; do not book or buy anything.')
+          setTaskPrepare(false)
+          setTaskDraftKey(crypto.randomUUID())
+          setPanel('task')
+        }} />
       ) : panel === 'local' ? (
         <LocalModels settings={settings} onActivate={(saved) => {
           setSettings(saved)

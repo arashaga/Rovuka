@@ -9,6 +9,7 @@ mod evaluations;
 mod evidence;
 mod graphics;
 mod host;
+mod memory;
 mod navigation;
 mod offers;
 mod policy;

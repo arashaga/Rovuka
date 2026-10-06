@@ -1,3 +1,5 @@
+import type { SharedMemoryContext } from './memoryTypes.ts'
+
 export type TaskStatus = 'running' | 'awaitingApproval' | 'completed' | 'stopped' | 'failed' | 'needsInput' | 'noEvidence'
 export type OperationKind = 'fill' | 'select' | 'click' | 'scroll' | 'submitSearch' | 'hotelSearch'
 
@@ -99,6 +101,7 @@ export interface Task {
   comparison: TabComparison | null
   preserveTabs: boolean
   workspaceTab: number | null
+  memoryContext: SharedMemoryContext | null
   actions: { id: string; kind: OperationKind; target: string; value: string | null; status: 'awaitingApproval' | 'approved' | 'executed' | 'stale' | 'failed' | 'cancelled' | 'declined' }[]
 }
 

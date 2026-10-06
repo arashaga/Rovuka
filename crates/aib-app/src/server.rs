@@ -31,6 +31,7 @@ use std::{
 mod agent_api;
 mod evaluation_api;
 mod local_api;
+mod memory_api;
 mod safety_api;
 
 #[derive(RustEmbed)]
@@ -78,6 +79,7 @@ struct AppState {
     agent: Arc<crate::agent::Service>,
     evaluations: Arc<crate::evaluations::Service>,
     model_jobs: std::sync::Mutex<()>,
+    memory: Result<Arc<crate::memory::Store>, String>,
 }
 
 /// Start the server on a background tokio runtime and return once it is listening.
@@ -86,6 +88,12 @@ pub fn start() -> anyhow::Result<ServerInfo> {
     let model_settings = aib_models::load_settings()?;
     let audit = Arc::new(crate::audit::Store::open()?);
     let evaluations = Arc::new(crate::evaluations::Service::open()?);
+    let memory = crate::memory::Store::open().map(Arc::new).map_err(|error| {
+        tracing::error!(
+            "Local memory is unavailable; ordinary browsing remains enabled: {error:#}"
+        );
+        format!("{error:#}")
+    });
     let (tx, rx) = std::sync::mpsc::channel();
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let token_for_thread = token.clone();
@@ -132,8 +140,14 @@ pub fn start() -> anyhow::Result<ServerInfo> {
                     agent: Arc::new(crate::agent::Service::new(audit)),
                     evaluations,
                     model_jobs: std::sync::Mutex::new(()),
+                    memory,
                 });
                 crate::bus::set_agent(state.agent.clone());
+                if let Ok(store) = &state.memory {
+                    let (queue, receive) = tokio::sync::mpsc::channel(64);
+                    crate::bus::set_memory(store.clone(), queue);
+                    tokio::spawn(crate::memory::capture_loop(store.clone(), receive));
+                }
                 let app = Router::new()
                     .route("/ws", get(ws_handler))
                     .route(
@@ -184,6 +198,42 @@ pub fn start() -> anyhow::Result<ServerInfo> {
                         post(agent_api::reply).options(preflight),
                     )
                     .route("/api/safety", get(safety_api::overview).options(preflight))
+                    .route("/api/memory", get(memory_api::overview).options(preflight))
+                    .route(
+                        "/api/memory/config",
+                        put(memory_api::configure).options(preflight),
+                    )
+                    .route(
+                        "/api/memory/search",
+                        get(memory_api::search).options(preflight),
+                    )
+                    .route("/api/memory/item", get(memory_api::item).options(preflight))
+                    .route(
+                        "/api/memory/preferences",
+                        get(memory_api::preferences)
+                            .put(memory_api::save_preferences)
+                            .options(preflight),
+                    )
+                    .route(
+                        "/api/memory/page",
+                        post(memory_api::save_page).options(preflight),
+                    )
+                    .route(
+                        "/api/memory/research",
+                        post(memory_api::save_research).options(preflight),
+                    )
+                    .route(
+                        "/api/memory/forget",
+                        post(memory_api::forget).options(preflight),
+                    )
+                    .route(
+                        "/api/memory/clear",
+                        post(memory_api::clear).options(preflight),
+                    )
+                    .route(
+                        "/api/memory/preview",
+                        post(memory_api::preview).options(preflight),
+                    )
                     .route(
                         "/api/safety/clear",
                         post(safety_api::clear).options(preflight),
@@ -672,6 +722,7 @@ mod tests {
             agent: Arc::new(crate::agent::Service::default()),
             evaluations: Arc::new(crate::evaluations::Service::for_auth_tests()),
             model_jobs: std::sync::Mutex::new(()),
+            memory: Err("Memory is not used by authentication unit tests".into()),
         };
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:12345"));
@@ -692,6 +743,7 @@ mod tests {
             agent: Arc::new(crate::agent::Service::default()),
             evaluations: Arc::new(crate::evaluations::Service::for_auth_tests()),
             model_jobs: std::sync::Mutex::new(()),
+            memory: Err("Memory is not used by authentication unit tests".into()),
         };
         let mut headers = HeaderMap::new();
         headers.insert(

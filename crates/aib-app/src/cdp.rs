@@ -81,6 +81,16 @@ pub enum HostRequest {
         step: SnapshotStep,
         reply: Reply,
     },
+    MemorySnapshot {
+        id: i32,
+        permit: crate::memory::CapturePermit,
+        step: SnapshotStep,
+        reply: Reply,
+    },
+    ValidateMemory {
+        permit: crate::memory::CapturePermit,
+        reply: Reply,
+    },
     ValidateSelected {
         task_id: String,
         target: ReadTarget,
@@ -402,6 +412,7 @@ pub async fn snapshot(
         if result.get("exceptionDetails").is_some() {
             bail!("The selected page reader could not inspect this document");
         }
+
         let mut value = result.pointer("/result/value")
             .context("The selected page reader returned no observation")?.clone();
         value["tabId"] = json!(permit.target.id);
@@ -413,6 +424,68 @@ pub async fn snapshot(
         }
         Ok(page)
     }).await.context("The selected page reader exceeded its 30-second limit")?
+}
+
+async fn memory_snapshot_call(
+    permit: &crate::memory::CapturePermit,
+    step: SnapshotStep,
+) -> anyhow::Result<JsonValue> {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let _cleanup = Cleanup(id);
+    let (reply, rx) = oneshot::channel();
+    crate::bus::send_agent(HostRequest::MemorySnapshot {
+        id,
+        permit: permit.clone(),
+        step,
+        reply,
+    });
+    let result = receive(rx).await?;
+    crate::bus::memory_capture_active(permit)?;
+    Ok(result)
+}
+
+pub async fn memory_snapshot(permit: &crate::memory::CapturePermit) -> anyhow::Result<Observation> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let tree = memory_snapshot_call(permit, SnapshotStep::FrameTree).await?;
+        let frame_id = tree
+            .pointer("/frameTree/frame/id")
+            .and_then(JsonValue::as_str)
+            .context("The local memory page frame is unavailable")?;
+        let world = memory_snapshot_call(
+            permit,
+            SnapshotStep::World {
+                frame_id: frame_id.into(),
+            },
+        )
+        .await?;
+        let context_id = world
+            .get("executionContextId")
+            .and_then(JsonValue::as_i64)
+            .context("The local memory reader context is unavailable")?;
+        let result = memory_snapshot_call(permit, SnapshotStep::Read { context_id }).await?;
+        if result.get("exceptionDetails").is_some() {
+            bail!("The local memory reader could not inspect this document");
+        }
+        let mut value = result
+            .pointer("/result/value")
+            .context("The local memory reader returned no text")?
+            .clone();
+        value["tabId"] = json!(permit.target.id);
+        let page: Observation =
+            serde_json::from_value(value).context("Invalid local memory observation")?;
+        let (reply, rx) = oneshot::channel();
+        crate::bus::send_agent(HostRequest::ValidateMemory {
+            permit: permit.clone(),
+            reply,
+        });
+        receive(rx).await?;
+        if page.url != permit.target.url {
+            bail!("The memory page changed during reading; nothing was saved");
+        }
+        Ok(page)
+    })
+    .await
+    .context("The local memory reader exceeded its 30-second limit")?
 }
 
 pub async fn workspace(task_id: &str) -> anyhow::Result<aib_ipc::TabInfo> {

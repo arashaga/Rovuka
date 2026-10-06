@@ -3,7 +3,9 @@ import { host } from './ipc.ts'
 import type { Task } from './taskTypes.ts'
 import './Comparison.css'
 
-export default function ComparisonResults({ task }: { task: Task }) {
+type ComparisonContent = Pick<Task, 'goal' | 'sources' | 'answer' | 'message' | 'comparison'>
+
+export default function ComparisonResults({ task, archived = false }: { task: ComparisonContent; archived?: boolean }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'manual'>('idle')
   const comparison = task.comparison
   if (!comparison) return null
@@ -14,7 +16,7 @@ export default function ComparisonResults({ task }: { task: Task }) {
   }
   const plain = (value: string) => value.replace(/[\t\r\n]+/g, ' ')
   const copiedText = [
-    'Rovuka selected-page comparison',
+    archived ? 'Rovuka saved selected-page comparison (historical)' : 'Rovuka selected-page comparison',
     task.goal,
     task.answer || task.message || '',
     `Snapshots: ${comparison.capturedAt}`,
@@ -35,7 +37,7 @@ export default function ComparisonResults({ task }: { task: Task }) {
     }
   }
   return <section className="findings-section comparison-results" aria-label="Selected-tab comparison">
-    <div className="findings-section-heading"><h2>Compare your selected pages</h2>
+    <div className="findings-section-heading"><h2>{archived ? 'Saved selected-page comparison' : 'Compare your selected pages'}</h2>
       <button className="assistant-secondary" onClick={() => void copy()}>
         {copyState === 'copied' ? 'Comparison copied' : 'Copy comparison with sources'}
       </button>
@@ -49,7 +51,7 @@ export default function ComparisonResults({ task }: { task: Task }) {
     {comparison.duplicateTabs > 0 && <p>{comparison.duplicateTabs} duplicate tab copies excluded. Each page is counted only once.</p>}
     <div className="comparison-scroll" role="region" aria-label="Scrollable page comparison table" tabIndex={0}>
       <table className="comparison-table">
-        <caption>Exact source-checked quotes, not estimates. Scroll sideways to see all criteria.</caption>
+        <caption>{archived ? 'Historical source-checked quotes, not reverified today.' : 'Exact source-checked quotes, not estimates.'} Scroll sideways to see all criteria.</caption>
         <thead><tr><th scope="col">Selected page</th>{comparison.columns.map(column => <th scope="col" key={column}>{column}</th>)}</tr></thead>
         <tbody>{comparison.rows.map(row => <tr key={row.sourceId}>
           <th scope="row"><button className="comparison-source" title="Open source in a new tab"
@@ -62,7 +64,7 @@ export default function ComparisonResults({ task }: { task: Task }) {
         </tr>)}</tbody>
       </table>
     </div>
-    <aside className="comparison-caveat">Rovuka checks each quote against both its protected page snapshot and that page's quarantined evidence.
+    <aside className="comparison-caveat">{archived ? 'These quotes were checked against their protected page snapshots and quarantined evidence when captured; they have not been reverified.' : "Rovuka checks each quote against both its protected page snapshot and that page's quarantined evidence."}
       Criterion selection and quote placement are model judgments, not independently verified.
       Search snippets remain leads, not provider-confirmed facts.
       Unknown does not mean zero, free or unavailable. Dates, totals, fees and live availability still need checking.

@@ -8,21 +8,26 @@ import ResearchResults, { SearchTrail } from './ResearchResults.tsx'
 import SafetyNotice from './SafetyNotice.tsx'
 import TaskDiagnostic, { DiagnosticActions } from './TaskDiagnostic.tsx'
 import { OperationApproval, OperationTrail } from './OperatorReview.tsx'
+import { MemoryContextPreview, SaveResearch } from './Memory.tsx'
+import type { MemoryPreview } from './memoryTypes.ts'
 
 const labels: Record<TaskStatus, string> = {
   running: 'Working', awaitingApproval: 'Your decision', completed: 'Your results are ready', stopped: 'Stopped', failed: 'Could not finish',
   needsInput: 'More details needed', noEvidence: 'No verified result',
 }
 
-export default function TaskMode({ onActive, expanded, initialGoal = '', initialPrepare = false, startFresh = false }: { onActive: (active: boolean) => void; expanded: boolean; initialGoal?: string; initialPrepare?: boolean; startFresh?: boolean }) {
+export default function TaskMode({ onActive, expanded, initialGoal = '', initialPrepare = false, initialMemory = null, startFresh = false }: { onActive: (active: boolean) => void; expanded: boolean; initialGoal?: string; initialPrepare?: boolean; initialMemory?: MemoryPreview | null; startFresh?: boolean }) {
   const [goal, setGoal] = useState(initialGoal)
   const [sharePage, setSharePage] = useState(false)
+  const [memoryPreview, setMemoryPreview] = useState<MemoryPreview | null>(initialMemory)
+  const [shareMemory, setShareMemory] = useState(false)
   const [mode, setMode] = useState<'research' | 'prepare'>(initialPrepare ? 'prepare' : 'research')
   const [startMode, setStartMode] = useState<'webSearch' | 'currentPage' | 'selectedTabs' | 'newResearchTab'>(initialPrepare ? 'currentPage' : 'webSearch')
   const [selectedTabs, setSelectedTabs] = useState<ReadTarget[]>([])
   const selectTabs = useCallback((tabs: ReadTarget[]) => {
     setSelectedTabs(tabs)
     setSharePage(false)
+    setShareMemory(false)
   }, [])
   const [compareOptions, setCompareOptions] = useState(true)
   const [task, setTask] = useState<Task | null>(null)
@@ -189,6 +194,8 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
     setShowSavedFindings(false)
     setSharePage(false)
     setSelectedTabs([])
+    setMemoryPreview(null)
+    setShareMemory(false)
     window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('#task-goal')?.focus(), 0)
   }
   const retryTask = () => {
@@ -231,8 +238,10 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
         event.preventDefault()
         void send('/api/agent', { goal, sharePage, startMode: startMode === 'newResearchTab' ? 'webSearch' : startMode,
           selectedTabs: startMode === 'selectedTabs' ? selectedTabs : [], preserveTabs: startMode === 'newResearchTab',
+          memoryPreviewId: shareMemory ? memoryPreview?.id : undefined, shareMemory,
           compareOptions: mode === 'research' && startMode !== 'selectedTabs' && compareOptions, mode }).then(ok => {
           if (ok) { setShowSetup(false); if (mode === 'prepare') host.send({ type: 'setAssistantExpanded', expanded: false }) }
+          else setShareMemory(false)
         })
       }}>
         <label htmlFor="task-mode">Task capability</label>
@@ -242,6 +251,8 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
           setStartMode(next === 'prepare' ? 'currentPage' : 'webSearch')
           setSharePage(false)
           setSelectedTabs([])
+          setMemoryPreview(null)
+          setShareMemory(false)
         }}>
           <option value="research">Research only (default)</option>
           <option value="prepare">Prepare public search fields - choose your approval scope</option>
@@ -249,7 +260,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
         <label htmlFor="task-goal">{mode === 'prepare' ? 'What should I prepare on this page?' : 'What do you want to find out?'}</label>
         <textarea id="task-goal" rows={3} value={goal} disabled={active(task) || busy}
           maxLength={5000} placeholder={mode === 'prepare' ? 'Prepare public search fields with exact dates and guest/filter values, then stop before booking.' : 'Find the key details, follow useful links, and explain the options with sources.'}
-          onChange={event => setGoal(event.target.value)} />
+          onChange={event => { setGoal(event.target.value); setShareMemory(false) }} />
         <label htmlFor="task-start">Starting point</label>
         <select id="task-start" value={startMode} disabled={mode === 'prepare' || active(task) || busy}
           onChange={event => {
@@ -257,6 +268,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
             setStartMode(value === 'selectedTabs' || value === 'newResearchTab' || value === 'currentPage' ? value : 'webSearch')
             setSharePage(false)
             setSelectedTabs([])
+            setShareMemory(false)
           }}>
           <option value="webSearch">Search the web in this tab</option>
           <option value="newResearchTab">Search the web in a new research tab</option>
@@ -280,11 +292,20 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
           : `Reads ${pageTitle || 'your active webpage'}, not the whole web. Choose Search the web if this page is unrelated.`}
           {' '}Pages read by the task are shared with your selected model. Do not use sensitive pages unless you intend to share them.</p>
         <p className="task-privacy-note">Privacy shield is always on. Recognizable secrets are masked, but detection is not exhaustive. A local audit keeps status, site origins and permissions—not your goal, pages or answers.</p>
+        {memoryPreview && mode === 'research' && <div className="memory-task-context">
+          <MemoryContextPreview context={memoryPreview.context} />
+          <label className="check-label"><input type="checkbox" checked={shareMemory} disabled={active(task) || busy}
+            onChange={event => setShareMemory(event.target.checked)} />Allow sharing this exact saved context for this research task</label>
+          <p className="privacy-note">This single-use preview expires after five minutes. Memory is not fresh evidence or action authority. Editing your goal, mode or tab selection resets consent.</p>
+          <button className="assistant-secondary" type="button" onClick={() => { setMemoryPreview(null); setShareMemory(false) }}>Remove saved context</button>
+          <button className="assistant-secondary" type="button" onClick={() => host.send({ type: 'openAssistant', panel: 'memory' })}>Return to Memory to preview again</button>
+        </div>}
         <label className="check-label">
           <input type="checkbox" checked={sharePage} disabled={active(task) || busy} onChange={event => setSharePage(event.target.checked)} />
           {startMode === 'selectedTabs' ? 'Allow sharing only my selected pages with my selected model' : 'Allow sharing task pages with my selected model'}
         </label>
         <button className="assistant-primary" type="submit" disabled={!ready || !goal.trim() || !sharePage || active(task) || busy
+          || (!!memoryPreview && !shareMemory)
           || (startMode === 'selectedTabs' && selectedTabs.length < 2)}>
           {active(task) ? 'Task in progress' : 'Start task'}
         </button>
@@ -321,6 +342,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
               onClick={() => void send('/api/agent/stop', { taskId: task.id })}>Stop / take over</button>}
           </div>
           <SafetyNotice task={task} />
+          <SaveResearch key={task.id} task={task} />
           {task.startMode === 'selectedTabs' && <details className="selected-scope" aria-label="Selected sharing scope">
             <summary>{task.selectedTabs.length} explicitly selected tabs · Read-only scope</summary>
             <ul>{task.selectedTabs.map(tab => <li key={tab.id}>{tab.title} · {tab.url}</li>)}</ul>

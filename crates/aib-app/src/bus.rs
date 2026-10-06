@@ -21,6 +21,38 @@ static LAST_TABS: Mutex<Option<Event>> = Mutex::new(None);
 static LAST_LAYOUT: Mutex<Option<Event>> = Mutex::new(None);
 static LAST_WORKSPACE: Mutex<Option<Event>> = Mutex::new(None);
 static AGENT: OnceLock<Arc<crate::agent::Service>> = OnceLock::new();
+static MEMORY: OnceLock<Arc<crate::memory::Store>> = OnceLock::new();
+static MEMORY_QUEUE: OnceLock<tokio::sync::mpsc::Sender<(crate::cdp::ReadTarget, u64)>> =
+    OnceLock::new();
+
+pub fn set_memory(
+    store: Arc<crate::memory::Store>,
+    queue: tokio::sync::mpsc::Sender<(crate::cdp::ReadTarget, u64)>,
+) {
+    let _ = MEMORY.set(store);
+    let _ = MEMORY_QUEUE.set(queue);
+}
+
+pub fn remember(target: crate::cdp::ReadTarget) {
+    let Some(store) = MEMORY.get() else { return };
+    let Some(generation) = store.automatic_generation(&target) else {
+        return;
+    };
+    if let Some(queue) = MEMORY_QUEUE.get() {
+        if let Err(error) = queue.try_send((target, generation)) {
+            store.capture_error(&anyhow::anyhow!(
+                "Local memory capture queue is unavailable or full: {error}"
+            ));
+        }
+    }
+}
+
+pub fn memory_capture_active(permit: &crate::memory::CapturePermit) -> anyhow::Result<()> {
+    MEMORY
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Local memory is unavailable"))?
+        .capture_active(permit)
+}
 
 pub fn set_agent(service: Arc<crate::agent::Service>) {
     let _ = AGENT.set(service);

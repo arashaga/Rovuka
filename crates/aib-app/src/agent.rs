@@ -446,7 +446,7 @@ impl Status {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Source {
     pub id: usize,
     pub url: String,
@@ -492,7 +492,7 @@ pub struct Destination {
     pub label: String,
 }
 
-#[derive(Clone, Debug, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultLink {
     pub label: String,
@@ -723,7 +723,7 @@ fn bounded_text(value: &str, max: usize) -> anyhow::Result<()> {
 }
 
 impl Report {
-    fn validate(&self, cited: &[usize]) -> anyhow::Result<()> {
+    pub(crate) fn validate(&self, cited: &[usize]) -> anyhow::Result<()> {
         bounded_text(&self.title, 200)?;
         bounded_text(&self.summary, 4000)?;
         validate_inline_refs(&self.title, cited)?;
@@ -847,6 +847,7 @@ pub struct TaskView {
     pub comparison: Option<comparison::Report>,
     pub preserve_tabs: bool,
     pub workspace_tab: Option<u32>,
+    pub memory_context: Option<crate::memory::SharedContext>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1036,12 +1037,42 @@ impl Service {
         selected_tabs: Vec<cdp::ReadTarget>,
         preserve_tabs: bool,
     ) -> anyhow::Result<TaskView> {
+        self.start_with_context(
+            goal,
+            settings,
+            key,
+            start_mode,
+            compare_options,
+            mode,
+            selected_tabs,
+            preserve_tabs,
+            None,
+        )
+    }
+
+    pub fn start_with_context(
+        self: &Arc<Self>,
+        goal: String,
+        settings: ModelSettings,
+        key: Option<String>,
+        start_mode: StartMode,
+        compare_options: bool,
+        mode: operator::Mode,
+        selected_tabs: Vec<cdp::ReadTarget>,
+        preserve_tabs: bool,
+        memory_context: Option<crate::memory::SharedContext>,
+    ) -> anyhow::Result<TaskView> {
         let mut state = self.task.lock().expect("agent lock poisoned");
         if state.as_ref().is_some_and(|task| task.view.active()) {
             bail!("A task is already active. Stop it before starting another.");
         }
         if mode == operator::Mode::Prepare && !matches!(start_mode, StartMode::CurrentPage) {
             bail!("Preparation must start on the current public webpage");
+        }
+        if memory_context.is_some() && mode != operator::Mode::Research {
+            bail!(
+                "Saved memory can only be explicitly shared with a new research task, not preparation or browser actions"
+            );
         }
         comparison::validate_scope(start_mode, mode, &selected_tabs, preserve_tabs)?;
         if mode == operator::Mode::Prepare
@@ -1110,7 +1141,12 @@ impl Service {
             comparison: None,
             preserve_tabs,
             workspace_tab: None,
+            memory_context,
         };
+        let mut view = view;
+        if view.memory_context.is_some() {
+            view.steps.push("You explicitly shared a previewed local-memory selection for this research task. Archived text is not fresh source evidence or action permission.".into());
+        }
         if let Some(audit) = &self.audit {
             audit.write(&view)?;
         }
@@ -1788,7 +1824,11 @@ impl Service {
                 .collect();
             let conversation = self.view().context("Task was removed")?.conversation;
             let compare_options = self.view().context("Task was removed")?.compare_options;
-            let prompt = json!({"userGoal":goal,"compareOptions":compare_options,"taskStartedAt":task_started_at,"conversation":conversation,"visitedPages":pages,"remainingSteps":MAX_STEPS-sources.len()}).to_string();
+            let mut prompt = json!({"userGoal":goal,"compareOptions":compare_options,"taskStartedAt":task_started_at,"conversation":conversation,"visitedPages":pages,"remainingSteps":MAX_STEPS-sources.len()});
+            if let Some(context) = self.view().context("Task was removed")?.memory_context {
+                prompt["savedContext"] = serde_json::to_value(context)?;
+            }
+            let prompt = prompt.to_string();
             let decision = tokio::time::timeout(Duration::from_secs(120), async {
               let mut correction: Option<(String, String)> = None;
               for attempt in 0..2 {
@@ -1796,7 +1836,7 @@ impl Service {
                     Some((error, response)) => correction_prompt(&prompt, error, response),
                     None => prompt.clone(),
                 };
-                let instructions = format!("{INSTRUCTION}\n\n{}", crate::offers::GUIDANCE);
+                let instructions = format!("{INSTRUCTION}\n\n{}\n\n{}", crate::offers::GUIDANCE, crate::memory::GUIDANCE);
                 let started = std::time::Instant::now();
                 self.update(id, |task| {
                     task.view.model_usage.requests += 1;
@@ -2840,6 +2880,7 @@ mod tests {
                 comparison: None,
                 preserve_tabs: false,
                 workspace_tab: None,
+                memory_context: None,
             },
             stop,
             approval: Some(approve),

@@ -16,6 +16,10 @@ pub(super) struct StartRequest {
     selected_tabs: Vec<crate::cdp::ReadTarget>,
     #[serde(default)]
     preserve_tabs: bool,
+    #[serde(default)]
+    memory_preview_id: Option<String>,
+    #[serde(default)]
+    share_memory: bool,
 }
 
 pub(super) async fn tabs(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -84,6 +88,16 @@ pub(super) async fn start(
         if state.evaluations.active() {
             anyhow::bail!("Stop or finish the model evaluation before starting a browser task");
         }
+        if request.share_memory != request.memory_preview_id.is_some() {
+            anyhow::bail!(
+                "Memory sharing requires both a native preview and explicit consent for this task"
+            );
+        }
+        if request.share_memory && request.mode != crate::agent::operator::Mode::Research {
+            anyhow::bail!(
+                "Saved context is research-only and cannot fill preparation requirements or grant actions"
+            );
+        }
         aib_models::validate_settings(&settings)?;
         let key = if aib_models::requires_api_key(&settings) {
             Some(
@@ -93,7 +107,7 @@ pub(super) async fn start(
         } else {
             None
         };
-        if selected_tabs.is_empty() && !request.preserve_tabs {
+        if selected_tabs.is_empty() && !request.preserve_tabs && !request.share_memory {
             return state.agent.start(
                 request.goal.trim().into(),
                 settings,
@@ -103,7 +117,21 @@ pub(super) async fn start(
                 request.mode,
             );
         }
-        state.agent.start_scoped(
+        let context = request
+            .memory_preview_id
+            .as_ref()
+            .map(|id| {
+                if let Some(key) = &key {
+                    crate::privacy::remember_secret(key);
+                }
+                state
+                    .memory
+                    .as_ref()
+                    .map_err(|error| anyhow::anyhow!("Local memory is unavailable: {error}"))?
+                    .consume(id)
+            })
+            .transpose()?;
+        state.agent.start_with_context(
             request.goal.trim().into(),
             settings,
             key,
@@ -112,6 +140,7 @@ pub(super) async fn start(
             request.mode,
             selected_tabs,
             request.preserve_tabs,
+            context,
         )
     })();
     with_cors(

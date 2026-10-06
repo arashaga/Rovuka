@@ -31,3 +31,4 @@ async-stream.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 regex = "1"
 percent-encoding = "2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }

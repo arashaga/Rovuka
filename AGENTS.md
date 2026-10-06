@@ -107,7 +107,8 @@ quotes or null/Unknown, no invented/calculated values or model URLs. One bounded
 correction only; failed readers never publish a partial table. All-Unknown
 tables are NoEvidence, not completed results or protocol errors. Search snippets
 remain leads. Do not claim semantic fact-checking, live availability, immutable
-page data, isolated cookies or persistent browser memory.
+page data or isolated cookies. Persistence is only the explicitly configured
+local Memory feature below, never implicit task resumption.
 The optional web-research workspace creates one ordinary task tab, preserves
 unread originals and reuses existing bounds/guards. Stop/completion release its
 lease while leaving it for review; comparisons create no worker tabs.
@@ -121,6 +122,47 @@ with no private artifacts.
 `--live-multitab` is a separate opt-in selected-model/public-Wikipedia smoke
 check with possible provider costs, disposable storage and owned-browser
 cleanup. Never include it in default or CI fixtures.
+
+Local memory uses `memory.rs`, authenticated `memory_api.rs` routes and a
+separate fixed native capture bridge. SQLite/FTS5 is lazy, default-off and
+single-owner; `AIB_MEMORY_DIR` is independent of the CEF profile override.
+Use bundled SQLite, parameterized SQL, literal keyword/date validation,
+bounded records and visible corruption/unavailable-store errors. Never reset
+a broken database silently or block the CEF thread on its database mutex:
+capture policy/status have separate locks, and SQLite work belongs on blocking
+workers. Cover lock contention and late discovery of stored privacy settings.
+Native captures freeze tab/URL/document/privacy generations. Keep ordered
+FrameTree/world/fixed-reader stages expiring and single-use across clones;
+pause/exclusions/clear must invalidate queued reads and prevent late commits.
+No model-supplied method/script/selector or relaxed operator authority.
+
+Archive only native finished research/comparison contents, not client-supplied
+reports, approvals, leases, live state, diagnostics or provider settings.
+Preserve resolved source links and native totals losslessly. Validate stored
+reports without weakening the strict live-model parser's native-only field
+rejection. Archived renderers remain historical/read-only, not fresh citations
+or resumed preparation. Exclusions purge dependent research; clear-all removes
+preferences and persistently pauses capture. Do not claim encryption,
+forensic/backup/provider erasure or exhaustive sensitive-page detection.
+
+Sharing needs an exact native preview plus separate explicit research consent.
+Limit selected items/excerpts, expiry and pending previews; consumption rechecks
+privacy generation, item versions/deletion/retention and recognizable secrets.
+No default selections or ordinary-task inheritance. Planner/synthesis receive
+separate historical context; quarantined page readers never receive it.
+Legitimate bounded task corrections retain the same frozen context. Mode/goal/
+scope changes, retries and new tasks reset consent; preparation refuses sharing.
+Context never supplies source authority or approves browser actions.
+Run `--memory-only`, `--tabs-only` and the full native suite after rebuilding.
+Native fixtures isolate `AIB_MEMORY_DIR`, use actual owned-browser restarts and
+retain trusted click/focus checks. Tabs must preserve full active/close visibility,
+clear theme borders, overflow/new controls, continuous keyboard navigation and
+exact 84px native chrome. Keyboard activation keeps native chrome focus through
+the optional IPC flag; pointer activation and native page shortcuts retain
+content focus and every tab activation still interrupts active tasks.
+Mirror the flag in Rust/TypeScript and preserve its older default wire shape.
+The default full suite includes memory, not live/scoped comparison-only runs.
+CI remains local/mock-only and uploads no memory artifacts.
 
 Privacy/audit changes must pass `node .\scripts\test-agent.cjs --safety-only`
 after rebuilding. Native fixtures isolate `AIB_AUDIT_DIR` from the real history.

@@ -4,6 +4,7 @@ import { taskActive, type Task, type ResearchReport } from './taskTypes.ts'
 import TaskDiagnostic, { DiagnosticActions } from './TaskDiagnostic.tsx'
 import SafetyNotice from './SafetyNotice.tsx'
 import ComparisonResults from './ComparisonResults.tsx'
+import { MemoryContextPreview, SaveResearch } from './Memory.tsx'
 
 type Offer = NonNullable<ResearchReport['options'][number]['offer']>
 const bases: Record<Offer['basis'], string> = {
@@ -101,6 +102,8 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
         </div>}
       </header>
       <SafetyNotice task={task} />
+      <SaveResearch key={task.id} task={task} />
+      {task.memoryContext && <MemoryContextPreview context={task.memoryContext} />}
       {(complete || task.status === 'noEvidence') && task.comparison && <ComparisonResults task={task} />}
       {!complete && <article className="findings-card findings-incomplete">
         <h2>{task.error?.includes('unapproved navigation') ? 'A website navigation was blocked' : 'No accepted final recommendation'}</h2>

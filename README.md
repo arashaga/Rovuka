@@ -2,7 +2,7 @@
 
 An AI-first, local-first task browser built on Chromium (CEF) with a Rust host and a React/TypeScript chrome UI.
 
-> Status: **Phase 6 multi-tab intelligence and research workspace**. Compare 2-6 explicitly selected tabs using source-checked quotations and Unknown cells, or research in one new tab without replacing your originals. Model studio, page Q&A, privacy/audit, Reliability and public search preparation remain available. Choose one-action approval or **Approve all for this task**; supported operations still need fresh native checks and audited permits. General website automation, bookings/payments, production sandboxing, bundled inference and installers are not shipped yet.
+> Status: **Phase 7 browser memory and personal context**. Save pages and finished research locally, search by words/date after a restart, and explicitly preview selected memories/preferences before sharing them with a new research task. Automatic capture is off by default. Browser tabs have clearer boundaries, an active cue and overflow controls. Selected-tab comparisons, model studio, page Q&A, privacy/audit, Reliability and public search preparation remain available. Choose one-action approval or **Approve all for this task**; saved context never grants action permission. General website automation, bookings/payments, production sandboxing, bundled inference and installers are not shipped yet.
 
 Porting guidance is maintained in the local [Mac OS parity](mac-os-parity.md)
 guide, which is intentionally Git-ignored. Copy it separately when moving to
@@ -77,16 +77,18 @@ describes this build's shipped features, not a remotely fetched feed.
   Task mode. Opening a draft does not start research, select page-sharing
   consent, approve navigation or replace the current page. Choose/configure a
   model, review the draft, explicitly allow sharing and press **Start task**.
-- **Connect your model**, **Explore local models**, **Open Ask AI** and
-  **Review safety** open their existing assistant workspaces. **Just browse**
-  focuses the address bar; ordinary browsing does not need a model.
+- **Connect your model**, **Explore local models**, **Open Ask AI**,
+  **Open Memory** and **Review safety** open their assistant workspaces.
+  **Just browse** focuses the address bar; ordinary browsing and local memory
+  search do not need a model.
 - The **Home** toolbar button opens the start page in a separate tab. The
   **+** button, native new-tab command and closing the last tab also show it.
   Back/Forward can return between that blank-tab state and a visited website.
   Explicit `--url` launches and ordinary result links still open their requested
   destination, not the start page.
-- Findings remain session-only and are preserved when opening Home. Return
-  through **Task mode → View findings**. Preparing a new draft does not erase
+- Unsaved findings remain session-only and are preserved when opening Home.
+  **Save research to Memory** keeps a historical copy across restarts. Return
+  to the live session through **Task mode → View findings**. Preparing a new draft does not erase
   the previous server-held result; a workspace shortcut stops an active run
   before switching away, just like other manual workspace changes.
 
@@ -95,8 +97,8 @@ tab, not a token-bearing website in tab history. Its authenticated UI URL stays
 out of the omnibox, tab snapshots and model-facing observations. Page Q&A
 explicitly refuses to share it: open a real webpage first. Themes, responsive
 320px layouts, focusable controls and reduced-motion artwork use the existing
-Clawpilot design. What's new introduces selected-tab comparisons, research in a
-new tab and task-wide or step-by-step approval. Runtimes,
+Clawpilot design. What's new introduces local memory, explicit context sharing,
+selected-tab comparisons and task-wide or step-by-step approval. Runtimes,
 booking/non-search submission automation and installers are still not bundled.
 
 ## Ordinary browsing and navigation errors
@@ -255,10 +257,13 @@ guarantee cancellation of remote inference/billing.
 Snapshots use only fixed native read methods in an isolated world. They capture
 bounded readable main-document text, not private form values or all hidden,
 iframe, image or PDF content. Quarantined no-tools evidence readers run at
-**concurrency two**; comparison synthesis receives only source-checked quotes,
-not raw page prose, unrelated tabs or their content. Every cell must be an exact
+**concurrency two**; fresh-page evidence passed to comparison synthesis contains
+only source-checked quotes, not raw page prose, unrelated tabs or their content.
+Every cell must be an exact
 normalized quote found in both its protected source snapshot and checked
-evidence, or **Unknown**. Missing details are not estimated, calculated, treated
+evidence, or **Unknown**. Separately consented saved context can accompany the
+synthesis as historical notes; it cannot supply fresh source citations.
+Missing details are not estimated, calculated, treated
 as free or silently filled from another source. A malformed comparison gets at
 most one correction. If a reader's nonempty output is rejected, it gets one
 bounded recovery: select IDs from at most 128 native-captured safe excerpts,
@@ -285,8 +290,8 @@ start. Each page needs a model reader request and at most one additional reader
 recovery request. Recovery is visible in Activity and request/repair counts;
 endpoint fallback may require extra HTTP attempts. Model time sums settled request durations,
 including provider errors, not parallel wall-clock completion time. Cancelled
-unfinished requests may have no recorded duration. Results are session-only,
-not browser memory.
+unfinished requests may have no recorded duration. Unsaved results are
+session-only; **Save research to Memory** explicitly archives the accepted result.
 
 To research across sites without replacing existing pages, select **Search the
 web in a new research tab**. This creates one ordinary task tab and reuses the
@@ -326,6 +331,105 @@ These are manual provider tests, not a promise of a particular live-model
 answer. If a page reloads/closes, the run stops rather than combining stale
 documents; refresh your selections and provide fresh consent. Unreadable pages
 or unsupported model output produce an explicit failure/evidence gap.
+
+### Phase 7: local memory and personal context
+
+Open **Ask AI → Memory** or the start page's **Open Memory** shortcut.
+Searching, reading, saving preferences and previewing context are local,
+model-free operations. Opening Memory creates no storage on a fresh profile;
+the first explicit save/settings change creates its SQLite database.
+
+- **Save current page locally** records the active public page's title, URL,
+  timestamp and up to 12,000 characters of readable main-document text.
+  The fixed native reader excludes form/editable/hidden values and masks
+  recognizable secrets. It does not capture every iframe, image or document,
+  and sensitive-page detection is not exhaustive.
+- **Enable automatic capture** opts into future eligible completed page loads.
+  Existing tabs are not read retroactively; reload or navigate after enabling.
+  **Pause automatic capture** stops future capture without removing old items.
+  Manual saves remain possible while capture is paused.
+- **Save research to Memory** archives a finished research result or comparison,
+  including its original source links and native price totals. Saved views are
+  explicitly historical and read-only, not restarted tasks or current offers.
+  Source/revisit buttons open ordinary new tabs. No approvals, live task state,
+  action permits, diagnostics or provider endpoints are archived.
+- **Search locally** finds literal words in saved pages/research, with category
+  and **Saved on or after** filters. This is SQLite FTS5 keyword search, not
+  semantic search or an embedding model. It retains the latest page snapshot
+  per URL, supports 50 results per page and keeps at most 1,000 items.
+- **Personal context** holds optional travel, shopping and research notes,
+  up to 500 characters per category. Use preferences such as nonstop flights,
+  repairable products or official sources, not passwords/payment/identity data.
+  Preferences never automatically fill forms or approve actions.
+
+#### Share deliberately
+
+Select up to five saved items and optionally **Include my saved preferences**,
+then choose **Preview selected context**. The exact native JSON preview contains
+bounded historical excerpts, metadata and a trust notice, not every stored page
+or the full archive. Nothing is selected or shared by default.
+
+**Use in a new research draft** opens an editable draft without a model call.
+Review the preview and separately check **Allow sharing this exact saved context
+for this research task** as well as the existing task-page sharing checkbox.
+Only that task receives the selected context. Its legitimate bounded format
+corrections use the same frozen context; later tasks do not inherit it.
+Quarantined page readers never receive historical memory.
+
+Previews expire after five minutes, are single-use and are rechecked natively.
+Deletion, changed privacy settings, changed snapshots and retention expiry
+invalidate stale selections. Editing the goal/mode/tab selection, retrying or
+starting another task resets consent. Preparation refuses memory sharing.
+Saved notes are not fresh evidence, citation IDs or browser-action authority:
+individual approval, **Approve all for this task**, revoke and Stop still apply.
+
+#### Privacy, storage and deletion
+
+Under **Site exclusions, retention & storage**, enter hostnames one per line.
+Exclusions include subdomains and delete matching pages and research archives
+containing those sources. Retention defaults to **30 days**, supports **1-365**
+and prunes pages/research on relevant reads/writes, not while the app is closed.
+Preferences remain until edited or cleared.
+
+**Forget this item** and confirmed **Clear all local memory** remove saved
+content and its full-text index entries. Clear-all also removes preferences
+and persistently pauses capture. These controls do not erase browser history,
+cookies, downloads, task audits, OS backups or text already sent to a provider.
+Rovuka does not encrypt this database or promise forensic erasure.
+
+Default Windows storage is
+`%LOCALAPPDATA%\AIBrowser\Memory\memory.sqlite3`. The absolute **`AIB_MEMORY_DIR`**
+override selects a different memory directory. A custom CEF `--profile-dir`
+does not automatically select a different memory store. Only one running
+process can own a database; a second instance reports the conflict instead of
+using stale privacy settings. Use separate overrides for independent profiles.
+Corrupt/unavailable storage fails visibly without preventing ordinary browsing;
+the app does not silently replace or reset the database.
+
+This phase does not add embeddings, cloud synchronization, scheduled monitoring,
+encrypted storage, task resumption or macOS certification.
+
+#### Try Phase 7
+
+1. Open a public article and wait for it to load. Choose **Ask AI → Memory →
+   Save current page locally**. Keep automatic capture paused for this test.
+2. Search for a distinctive word from the article, then open its saved title.
+   Expect a timestamped historical snapshot and a revisit-in-new-tab button.
+3. Finish a research task or selected-tab comparison, then choose
+   **Save research to Memory** in its findings.
+4. Close Rovuka normally and reopen `.\target\debug\rovuka.exe`. Search Memory
+   again: both explicitly saved items remain. No task or approval resumes.
+5. Add a preference, select one item, preview its context and open a new research
+   draft. Verify both sharing checkboxes start unchecked; grant them only after
+   reviewing the exact preview and entering the task.
+6. Choose **Forget this item → Confirm deletion**, then repeat the search.
+   Confirmed **Clear all local memory** also removes preferences and pauses
+   capture across a further restart.
+
+The tab strip uses visible borders/backgrounds, a rose active cue, horizontal
+overflow arrows and a separate new-tab button. Left/Right/Home/End work on a
+focused tab; active tabs stay fully visible, including their close control,
+when the viewport narrows. Native chrome remains 38px tabs + 46px toolbar.
 
 ### Conversation layout and date awareness
 
@@ -620,8 +724,9 @@ shows an incomplete result with the failure and observed pages—never a fake wi
 
 This view expands the existing trusted CEF assistant across the content area;
 it does not navigate the web tab to a token-bearing UI URL or execute model HTML.
-Model strings are rendered as React text. Findings and conversations are
-session-only, not saved/exported reports yet.
+Model strings are rendered as React text. Live tasks and conversations remain
+session-only; **Save research to Memory** explicitly preserves finished findings
+as historical snapshots, not resumable tasks.
 
 ### Task-scoped approval controls
 
@@ -893,7 +998,8 @@ allow-all research grant.
   `%LOCALAPPDATA%\AIBrowser\task-audit`. It contains timestamps, last recorded
   status, counts, site origins and permission decisions—not the goal, page text,
   answer, full URL/query/fragment, model endpoint or credential. Up to 50 recent
-  records are retained. The report and conversation are still session-only.
+  records are retained. Unsaved findings and conversations remain session-only;
+  explicitly saved Memory archives are separate from this metadata audit.
   An audit is not replay, task resumption, or tamper-proof evidence.
 - **Explicit storage failures:** a task cannot start if its audit cannot be
   saved. A later audit write failure stops the run and exposes the error instead
@@ -990,7 +1096,9 @@ only. Ordinary site scripts, their
 network requests and existing signed-in cookies remain active. Even a GET link
 can have side effects on poorly designed sites: review each URL carefully.
 The development browser's production sandbox work also remains unfinished.
-Tasks are kept in memory; starting a new run replaces the last run.
+Live tasks are kept in memory; starting a new run replaces the last run.
+Explicitly saved Memory archives survive that replacement and a restart but
+cannot restore task authority or resume the conversation.
 Small local models may fail the JSON protocol; use a stronger instruction-following
 model rather than expecting one protocol retry to make every model reliable.
 
@@ -1022,7 +1130,7 @@ $env:AIB_UI_DEV_URL = "http://localhost:5173"; cargo run
 cargo test --workspace -- --test-threads=1
 ```
 
-Native agent integration tests (Windows, Node.js 22+, browser already built):
+Native agent integration tests (Windows, Node.js 22.12+, browser already built):
 
 ```powershell
 node .\scripts\test-agent.cjs
@@ -1068,6 +1176,24 @@ themes, duplicates, reload/close, Stop/revoke, bounded protocol correction,
 all-Unknown evidence gaps and the new research tab's lease cleanup. The full
 suite includes these groups. Windows CI runs this focused suite after the
 repeated native evaluations; only metadata evaluation JSON is uploaded.
+
+For local memory and browser-tab coverage:
+
+```powershell
+node .\scripts\test-agent.cjs --memory-only
+node .\scripts\test-agent.cjs --tabs-only
+```
+
+Memory fixtures isolate `AIB_MEMORY_DIR` as well as the browser profile, model
+settings and audit. They verify real save/restart/retrieve/delete cycles,
+capture/pause/exclusions, form/secret privacy, native archives and price links,
+preferences, exact sharing consent and stale-preview rejection, 320px themes,
+tab borders/overflow/continuous keyboard/native chrome, and corrupt-storage recovery.
+Only local pages and mock models are used. Profiles, databases, memory text,
+screenshots, logs and credentials must never be uploaded as CI artifacts.
+The full default suite includes these groups after the baseline checks; focused
+multi-tab and live-model runners do not implicitly run memory fixtures.
+Windows CI runs the focused memory suite separately after multi-tab checks.
 
 An explicitly opted-in live check uses your configured model and public
 Rust/Python Wikipedia articles with the exact manual-test prompt above:
@@ -1170,9 +1296,11 @@ show either actual website content or a visible native failure, retaining the
 address. It does not solve site challenges, change settings or certify booking
 support. All browsers use disposable profiles and close normally.
 
-Current Windows verification: **116 workspace Rust tests and all 153 native
-regression groups pass**, preserving all 150 preceding groups and adding three
-reader-recovery groups. The 16 scoped multi-tab, comparison and preserved-research
+Current Windows verification: **128 workspace Rust tests and all 171 native
+regression groups pass**, preserving every one of the 153 published baseline
+groups and adding 18 local-memory groups. Eleven Rust tests cover memory storage,
+privacy/retention/consent/archive validation, single-owner/lazy settings and
+nonblocking capture-policy checks. The 16 scoped multi-tab, comparison and preserved-research
 groups cover trusted
 selection/approval, exact two-reader concurrency, unselected/form privacy,
 source-checked/Unknown cells, reload/close, revoke/Stop, failed synthesis latency,
@@ -1182,17 +1310,23 @@ acceptance. Provider/empty-selection failures and Stop during recovery remain
 explicit; the additional reader requests and corrections are counted.
 Existing ordinary navigation, hotel preparation, task-wide approval, manual
 takeover, narrow themes, privacy/audit and shutdown checks remain passing.
+Memory coverage includes actual application restarts, lossless saved research
+prices/source links, preferences, exact consent and stale previews, pause/clear
+races, full-text deletion and visible corrupt-store recovery without losing
+ordinary browsing. Final tab checks pass repeated resize/theme runs and
+continuous Arrow/Home/End/wrap input without artificially refocusing. Native
+chrome remains exactly 84px and active/close/new controls stay accessible.
 A separate two-repeat evaluation passes **16/16 native task cases and all six
 mock model-protocol checks**, including wrong-query and wrong-displayed-result
 failures, Stop and both 320px themes. UI type-check, production UI build, standard
 native build, formatting and editor diagnostics also pass. Fixture UI transitions
 and live-activity checks use explicit synchronization, not fixed delay guesses.
-The original Rust/Python Wikipedia request also completed with the configured
-live model, including an actual rejected-quote recovery, two source-bound rows,
-three criteria and preserved originals/new-tab source links. One initial full
-run hit the existing conversation-expansion focus timeout; its unchanged rerun
-passed all 153 groups. Live model results can vary; this is not a guarantee of
-all future outputs.
+The earlier Phase 6 Rust/Python Wikipedia request also completed with the
+configured live model, including an actual rejected-quote recovery, two
+source-bound rows, three criteria and preserved originals/new-tab source links.
+Phase 7's new regressions use local pages and mock models, not that historical
+live-model run. Live model results can vary; this is not a guarantee of all
+future outputs.
 
 The actual native live-hotel test followed bare `hotel.com` to secure Hotels.com
 and completed the natural Cancun request with **one human task-wide approval,
@@ -1214,8 +1348,8 @@ The earlier separate model-free live-browsing smoke displayed example.com and
 the Hotels.com homepage; **explicit** `https://hotel.com/` retained its honest
 connection-refused error without a downgrade. These fixtures do not certify
 live model accuracy or macOS readiness. Windows CI independently runs the
-relative-date mock/native evaluations and scoped multi-tab fixtures; it never
-uses personal models, profiles or credentials.
+relative-date mock/native evaluations, scoped multi-tab and local memory/restart/
+tab fixtures; it never uses personal models, profiles or credentials.
 
 It also checks comparison-format correction, observed direct destinations,
 invented-link rejection, scoped grants/revocation/expiry, page bounds, native

@@ -92,10 +92,10 @@ export default function StartPage() {
     <div className="start-shell">
       <section className="start-updates" aria-label="What's new">
         <div className="start-update-label"><span className="start-update-dot" />What's new</div>
-        <div className="start-update-copy"><strong>Your tabs. One clear comparison.</strong>
-          <span>Selected-tab comparisons · Research in a new tab · Approve all or step by step</span>
+        <div className="start-update-copy"><strong>Good research, worth remembering.</strong>
+          <span>Local memory &amp; saved comparisons · Opt-in capture · Preview before model sharing</span>
         </div>
-        <button onClick={() => open('safety')}>Explore Safety <Icon name="arrow" /></button>
+        <button onClick={() => open('memory')}>Explore Memory <Icon name="arrow" /></button>
       </section>
 
       <header className="start-header">

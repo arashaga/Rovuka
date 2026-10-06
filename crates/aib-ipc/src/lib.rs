@@ -15,6 +15,7 @@ pub enum AssistantPanel {
     Local,
     Safety,
     Settings,
+    Memory,
 }
 
 /// UI -> host.
@@ -34,6 +35,8 @@ pub enum Command {
     },
     ActivateTab {
         tab_id: TabId,
+        #[serde(default, skip_serializing_if = "is_false")]
+        keep_chrome_focus: bool,
     },
     /// Omnibox input: either a URL or a search query.
     Navigate {
@@ -306,13 +309,43 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_tab_activation_keeps_focus_and_interrupts_tasks() {
+        let pointer: Command = serde_json::from_str(r#"{"type":"activateTab","tabId":2}"#).unwrap();
+        assert!(matches!(
+            pointer,
+            Command::ActivateTab {
+                keep_chrome_focus: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            serde_json::to_string(&pointer).unwrap(),
+            r#"{"type":"activateTab","tabId":2}"#
+        );
+        let keyboard: Command =
+            serde_json::from_str(r#"{"type":"activateTab","tabId":3,"keepChromeFocus":true}"#)
+                .unwrap();
+        assert!(matches!(
+            keyboard,
+            Command::ActivateTab {
+                keep_chrome_focus: true,
+                ..
+            }
+        ));
+        assert!(keyboard.interrupts_agent());
+    }
+
+    #[test]
     fn native_and_ui_navigation_commands_interrupt_tasks() {
         for command in [
             Command::Reload { tab_id: None },
             Command::Stop { tab_id: None },
             Command::NewTab { url: None },
             Command::CloseTab { tab_id: 1 },
-            Command::ActivateTab { tab_id: 2 },
+            Command::ActivateTab {
+                tab_id: 2,
+                keep_chrome_focus: false,
+            },
             Command::ToggleAssistant,
             Command::OpenAssistant {
                 panel: AssistantPanel::Task,

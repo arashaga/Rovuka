@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { host, type DownloadInfo, type TabInfo, type TabId } from './ipc.ts'
 
 function displayUrl(url: string): string {
@@ -20,6 +20,8 @@ export default function App() {
   const [editing, setEditing] = useState(false)
   const [findingsOpen, setFindingsOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const tabListRef = useRef<HTMLDivElement>(null)
+  const [tabOverflow, setTabOverflow] = useState(false)
 
   const activeTab = tabs.find((t) => t.id === active)
   const address = activeTab?.pendingUrl || activeTab?.loadError?.url || activeTab?.url || ''
@@ -61,6 +63,37 @@ export default function App() {
     }
   }, [active])
 
+  useEffect(() => {
+    const list = tabListRef.current
+    if (!list) return
+    const measure = () => {
+      setTabOverflow(list.scrollWidth > list.clientWidth + 1)
+      const selected = list.querySelector<HTMLElement>('.tab.active')
+      if (selected) {
+        const edge = list.getBoundingClientRect()
+        const box = selected.getBoundingClientRect()
+        if (box.left < edge.left) list.scrollLeft += box.left - edge.left
+        else if (box.right > edge.right) list.scrollLeft += box.right - edge.right
+      }
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(list)
+    window.addEventListener('resize', measure)
+    measure()
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
+  }, [tabs.length, active])
+
+  const tabKey = (event: KeyboardEvent<HTMLButtonElement>, id: TabId) => {
+    const index = tabs.findIndex(tab => tab.id === id)
+    const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+      : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
+    if (next < 0) return
+    event.preventDefault()
+    host.send({ type: 'activateTab', tabId: tabs[next].id, keepChromeFocus: true })
+    tabListRef.current?.querySelector<HTMLButtonElement>(`[data-tab-id="${tabs[next].id}"]`)?.focus()
+  }
+
   const submit = () => {
     const input = omnibox.trim()
     if (!input) return
@@ -77,6 +110,9 @@ export default function App() {
   return (
     <div className="chrome">
       <div className="tabstrip">
+        {tabOverflow && <button className="tab-scroll" title="Scroll tabs left" aria-label="Scroll tabs left"
+          onClick={() => tabListRef.current?.scrollBy({ left: -240, behavior: 'smooth' })}>‹</button>}
+        <div className="browser-tabs" ref={tabListRef} role="tablist" aria-label="Browser tabs">
         {tabs.map((t) => (
           <div
             key={t.id}
@@ -86,16 +122,19 @@ export default function App() {
               if (e.button === 1) {
                 e.preventDefault()
                 host.send({ type: 'closeTab', tabId: t.id })
-              } else if (e.button === 0) {
-                host.send({ type: 'activateTab', tabId: t.id })
               }
             }}
           >
-            <Favicon tab={t} />
-            <span className="tab-title">{t.title || displayUrl(t.url) || 'New Tab'}</span>
+            <button className="tab-select" role="tab" aria-selected={t.id === active}
+              tabIndex={t.id === active ? 0 : -1} data-tab-id={t.id}
+              onClick={() => host.send({ type: 'activateTab', tabId: t.id })} onKeyDown={event => tabKey(event, t.id)}>
+              <Favicon tab={t} />
+              <span className="tab-title">{t.title || displayUrl(t.url) || 'New Tab'}</span>
+            </button>
             <button
               className="tab-close"
               title="Close tab (Ctrl+W)"
+              aria-label={`Close ${t.title || 'new tab'}`}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => host.send({ type: 'closeTab', tabId: t.id })}
             >
@@ -103,6 +142,9 @@ export default function App() {
             </button>
           </div>
         ))}
+        </div>
+        {tabOverflow && <button className="tab-scroll" title="Scroll tabs right" aria-label="Scroll tabs right"
+          onClick={() => tabListRef.current?.scrollBy({ left: 240, behavior: 'smooth' })}>›</button>}
         <button className="new-tab" title="New tab (Ctrl+T)" onClick={() => host.send({ type: 'newTab' })}>
           +
         </button>

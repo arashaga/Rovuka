@@ -329,6 +329,39 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
             let _ = reply.send(result);
             return;
         }
+        HostRequest::MemorySnapshot {
+            id,
+            permit,
+            step,
+            reply,
+        } => {
+            if reply.is_closed() {
+                return;
+            }
+            let result = crate::bus::memory_capture_active(&permit)
+                .and_then(|()| permit.claim_step(&step))
+                .and_then(|()| selected_browser(&permit.target));
+            match result {
+                Ok(browser) => {
+                    let (method, mut params) = step.request();
+                    if method == "Page.createIsolatedWorld" {
+                        params["worldName"] = serde_json::json!("aib-local-memory-reader");
+                    }
+                    crate::cdp::dispatch(browser, id, method, params, reply);
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                }
+            }
+            return;
+        }
+        HostRequest::ValidateMemory { permit, reply } => {
+            let result = crate::bus::memory_capture_active(&permit)
+                .and_then(|()| selected_browser(&permit.target))
+                .map(|_| serde_json::json!({}));
+            let _ = reply.send(result);
+            return;
+        }
         HostRequest::Workspace { task_id, reply } => {
             if reply.is_closed() {
                 return;
@@ -412,6 +445,8 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
         | HostRequest::ReadTabs { .. }
         | HostRequest::Snapshot { .. }
         | HostRequest::ValidateSelected { .. }
+        | HostRequest::MemorySnapshot { .. }
+        | HostRequest::ValidateMemory { .. }
         | HostRequest::Workspace { .. } => unreachable!(),
     };
     let target = with_state(|s| {
@@ -647,6 +682,8 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
         | HostRequest::ReadTabs { .. }
         | HostRequest::Snapshot { .. }
         | HostRequest::ValidateSelected { .. }
+        | HostRequest::MemorySnapshot { .. }
+        | HostRequest::ValidateMemory { .. }
         | HostRequest::Workspace { .. } => unreachable!(),
     }
 }
@@ -669,7 +706,10 @@ pub fn handle_command(cmd: Command) {
             new_tab(url.as_deref(), true);
         }
         Command::CloseTab { tab_id } => close_tab(tab_id),
-        Command::ActivateTab { tab_id } => activate_tab(tab_id),
+        Command::ActivateTab {
+            tab_id,
+            keep_chrome_focus,
+        } => activate_tab(tab_id, !keep_chrome_focus),
         Command::Navigate { tab_id, input } => {
             let url = aib_ipc::resolve_omnibox_input(&input, SEARCH_TEMPLATE);
             match active_or(tab_id) {
@@ -932,7 +972,7 @@ fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
     content.add_child_view(Some(&mut v));
 
     if activate {
-        activate_tab(id);
+        activate_tab(id, true);
         if url == "about:blank" {
             focus_omnibox();
         }
@@ -942,7 +982,7 @@ fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
     Some(id)
 }
 
-fn activate_tab(id: TabId) {
+fn activate_tab(id: TabId, focus_content: bool) {
     let valid = with_state(|s| {
         if !s.tabs.iter().any(|t| t.id == id) {
             return false;
@@ -953,7 +993,7 @@ fn activate_tab(id: TabId) {
     if !valid {
         return;
     }
-    layout_content(true);
+    layout_content(focus_content);
     emit_tabs();
     update_window_title();
 }
@@ -1103,7 +1143,7 @@ fn close_tab(id: TabId) {
     drop(tab);
 
     match next {
-        Some(next) => activate_tab(next),
+        Some(next) => activate_tab(next, true),
         None => {
             new_tab(None, true);
         }
@@ -1148,7 +1188,10 @@ fn handle_shortcut(event: &KeyEvent) -> bool {
                 let j = if shift { (i + n - 1) % n } else { (i + 1) % n };
                 Some(s.tabs[j].id)
             });
-            next.map(|tab_id| Command::ActivateTab { tab_id })
+            next.map(|tab_id| Command::ActivateTab {
+                tab_id,
+                keep_chrome_focus: false,
+            })
         }
         (false, false, false, 0x74) | (true, false, false, 0x52) => {
             Some(Command::Reload { tab_id: None })
@@ -1759,6 +1802,13 @@ wrap_load_handler! {
                     t.pending_url = None;
                 }
             });
+            if is_loading == 0 {
+                let target = with_state(|s| s.tabs.iter().find(|item| item.id == tab)
+                    .filter(|item| selected_tab_error(item).is_none())
+                    .map(|item| crate::cdp::ReadTarget { id:tab,url:item.info.url.clone(),
+                        title:item.info.title.clone(),document_epoch:item.document_epoch }));
+                if let Some(target) = target { crate::bus::remember(target); }
+            }
         }
 
         fn on_load_end(

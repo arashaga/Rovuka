@@ -1655,6 +1655,7 @@ mod tests {
                 comparison: None,
                 preserve_tabs: false,
                 workspace_tab: None,
+                memory_context: None,
             },
             stop,
             approval: Some(approve),
