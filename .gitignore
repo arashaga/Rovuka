@@ -20,6 +20,7 @@ local-runtimes.json
 /profiles/
 /test-results/
 /task-audit/
+/model-evaluations/
 /audit-exports/
 /playwright-report/
 *.pem

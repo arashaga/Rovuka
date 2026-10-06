@@ -92,11 +92,12 @@ export default function SafetyCenter() {
     </header>
     <div className="safety-protections" aria-label="Research protections">
       <article><strong>Private values stay masked</strong><p>Recognizable passwords, API keys, one-time codes and card numbers are removed before model calls and diagnostic logging. Your saved API key is used only to authenticate your chosen model.</p></article>
-      <article><strong>Research is not permission to act</strong><p>Native checks block sensitive URLs, checkout/account changes, popups and downloads. Optional preparation requires a separate, single-use approval for each public search action. Allow all research never covers page actions.</p></article>
+      <article><strong>You choose the task’s approval scope</strong><p>Approve one action or approve all supported public actions for the current task and tab. Automatic actions still use fresh, audited, single-use native permits and exact revalidation. Revoke, Stop or manual page input retires the grant. Legacy research-only permission never authorizes page actions.</p></article>
+      <article><strong>Read, then independently check</strong><p>A no-tools reader returns source-checked factual quotes; the acting agent does not receive raw webpage prose. Prepared field values and final GET-search parameters are independently verified. These layers reduce risk, not guarantee immunity to malicious pages.</p></article>
       <article><strong>Stop means take over</strong><p>Stop, manual navigation and tab changes cancel the run and invalidate pending approvals. An already approved page load may still finish.</p></article>
     </div>
     <details className="safety-limits"><summary>Important limits</summary>
-      <p>Detection is not exhaustive and does not remove all personal information. Page data remains untrusted; a separate quarantined LLM reader and critic are not implemented. Website scripts and signed-in cookies remain active. The development build is not production-sandboxed.</p>
+      <p>Detection is not exhaustive and does not remove all personal information. Task research uses a separate no-tools reader, but untrusted labels and source quotes still require caution; a general LLM critic is not implemented. Website scripts and signed-in cookies remain active. The development build is not production-sandboxed.</p>
       <p>Preparation supports public search fields, filters and reviewed GET searches, not arbitrary forms, purchases or bookings. Website scripts may transmit typed values immediately; this is not network isolation. Never share a page you do not intend to send to your selected model. A local runtime may itself use the network.</p>
     </details>
     <section className="safety-audit" aria-label="Local task audit">

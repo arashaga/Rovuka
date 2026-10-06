@@ -1,0 +1,86 @@
+name: Windows reliability
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reliability-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-fixtures:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui\package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Locate native build tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or !$installation) { throw 'Visual Studio C++ build tools are required' }
+          $cmake = Join-Path $installation 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+          $ninja = Join-Path $installation 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+          if (!(Test-Path "$cmake\cmake.exe") -or !(Test-Path "$ninja\ninja.exe")) {
+            throw 'Visual Studio CMake and Ninja are required'
+          }
+          $cmake | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $ninja | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "CEF_PATH=$env:RUNNER_TEMP\rovuka-cef" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Cache the pinned public CEF SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\rovuka-cef
+          key: cef-${{ runner.os }}-154.4.0
+      - name: Restore and build UI
+        run: |
+          npm --prefix .\ui ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix .\ui run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Formatting and fixture syntax
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check .\scripts\test-agent.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Serial Rust workspace tests
+        run: cargo test --locked --workspace -- --test-threads=1
+      - name: Build the standard native browser
+        run: |
+          cargo build --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path .\target\debug\rovuka.exe) -or !(Test-Path .\target\debug\libcef.dll)) {
+            throw 'The standard executable and CEF runtime must be present'
+          }
+      - name: Repeat local native task evaluations
+        run: |
+          node .\scripts\test-agent.cjs --eval-only --repeat 2 --eval-output "$env:RUNNER_TEMP\rovuka-native-evaluation.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload metadata-only native outcomes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-evaluation
+          path: ${{ runner.temp }}\rovuka-native-evaluation.json
+          if-no-files-found: warn
+          retention-days: 14

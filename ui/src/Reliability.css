@@ -1,0 +1,29 @@
+.reliability-center { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 16px; color: var(--cp-text); }
+.reliability-center h2 { margin: 8px 0; }
+.reliability-center p, .reliability-center small { line-height: 1.6; overflow-wrap: anywhere; }
+.reliability-center p { font-size: 13px; }
+.reliability-center small { display: block; color: var(--cp-text-muted); font-size: 11px; }
+.reliability-scope, .capability-report, .reliability-import { border: 1px solid var(--cp-border); border-radius: 10px; padding: 16px; margin: 16px 0; background: var(--cp-surface); }
+.reliability-scope { background: var(--cp-accent-soft); }
+.reliability-consent { display: flex; gap: 8px; font-size: 12px; line-height: 1.6; margin: 16px 0; }
+.reliability-consent input { flex: none; width: 16px; height: 16px; accent-color: var(--cp-accent); }
+.capability-report header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.capability-report header > strong { overflow-wrap: anywhere; }
+.capability-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
+.capability-metrics strong, .capability-metrics span { display: block; }
+.capability-metrics strong { font-size: 20px; color: var(--cp-accent); }
+.capability-metrics span { color: var(--cp-text-muted); font-size: 10px; }
+.capability-report details { margin-top: 16px; }
+.capability-report summary, .reliability-import summary { cursor: pointer; font-size: 12px; font-weight: 700; }
+.capability-report ul { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
+.capability-report li { display: grid; gap: 4px; padding: 8px; border: 1px solid var(--cp-border); border-radius: 6px; font-size: 11px; overflow-wrap: anywhere; }
+.capability-report li span { color: var(--cp-text-muted); }
+.capability-report li[data-status="passed"] span { color: var(--cp-success); }
+.capability-report li[data-status="failed"] span { color: var(--cp-danger); }
+.reliability-import label { display: grid; gap: 8px; font-size: 12px; }
+.reliability-import input { max-width: 100%; font-size: 11px; }
+.task-requirements, .task-recovery, .task-verification { padding: 12px; margin: 12px 0; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-bg-elevated); font-size: 12px; overflow-wrap: anywhere; }
+.task-verification { border-color: var(--cp-success); }
+.task-recovery { border-color: var(--cp-warning); }
+.task-requirements p, .task-recovery p, .task-verification p { margin: 8px 0; line-height: 1.6; }
+.task-requirements small { color: var(--cp-text-muted); }

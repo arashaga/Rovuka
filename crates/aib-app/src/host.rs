@@ -3,7 +3,7 @@
 //! All state lives on the CEF UI thread (thread_local). Never hold a `STATE` borrow while
 //! calling into CEF: many CEF calls can re-enter our handlers synchronously.
 
-use aib_ipc::{Command, DownloadInfo, DownloadState, Event, TabId, TabInfo};
+use aib_ipc::{Command, DownloadInfo, DownloadState, Event, PageLoadError, TabId, TabInfo};
 use cef::*;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -29,6 +29,8 @@ struct Tab {
     view: BrowserView,
     browser: Option<Browser>,
     info: TabInfo,
+    navigation_url: String,
+    http_fallback: Option<crate::navigation::PublicHttpFallback>,
 }
 
 struct AgentGuard {
@@ -125,7 +127,7 @@ fn update_tab(id: TabId, f: impl FnOnce(&mut TabInfo)) {
         let before = tab.info.clone();
         f(&mut tab.info);
         let changed_surface =
-            s.active == Some(id) && before.url.is_empty() != tab.info.url.is_empty();
+            s.active == Some(id) && before.needs_trusted_page() != tab.info.needs_trusted_page();
         (before != tab.info).then_some(changed_surface)
     });
     if let Some(changed_surface) = changed {
@@ -153,6 +155,43 @@ fn update_window_title() {
         };
         window.set_title(Some(&CefString::from(title.as_str())));
     }
+}
+
+fn begin_navigation(tab: TabId, url: &str) {
+    with_state(|s| {
+        if let Some(tab) = s.tabs.iter_mut().find(|item| item.id == tab) {
+            tab.navigation_url = url.to_owned();
+            if tab.http_fallback.as_ref().is_some_and(|fallback| {
+                url::Url::parse(url)
+                    .ok()
+                    .is_none_or(|url| url != fallback.https)
+            }) {
+                tab.http_fallback = None;
+            }
+        }
+    });
+    update_tab(tab, |info| {
+        info.pending_url = (url != "about:blank").then(|| url.to_owned());
+        info.load_error = None;
+        info.loading = true;
+        info.progress = 0.0;
+    });
+}
+
+fn begin_history_navigation(tab: TabId) {
+    // Cached history restoration can skip on_before_browse.
+    with_state(|s| {
+        if let Some(tab) = s.tabs.iter_mut().find(|item| item.id == tab) {
+            tab.navigation_url.clear();
+            tab.http_fallback = None;
+        }
+    });
+    update_tab(tab, |info| {
+        info.pending_url = None;
+        info.load_error = None;
+        info.loading = true;
+        info.progress = 0.0;
+    });
 }
 
 fn active_or(tab_id: Option<TabId>) -> Option<TabId> {
@@ -257,6 +296,18 @@ pub fn handle_agent(request: crate::cdp::HostRequest) {
                     .and_then(|g| g.blocked.clone())
             }) {
                 anyhow::bail!("{blocked}");
+            }
+            if !matches!(&request, HostRequest::Lease { .. }) {
+                if let Some(error) = &info.load_error {
+                    anyhow::bail!(
+                        "The webpage did not load: {} ({}). Retry or open another page before using AI.",
+                        error.name,
+                        crate::diagnostics::short_url(&error.url)
+                    );
+                }
+                if expected.is_some() && info.pending_url.is_some() {
+                    return Err(crate::cdp::PageLoading.into());
+                }
             }
             if let Some(expected) = expected {
                 if info.url != expected {
@@ -464,6 +515,15 @@ pub fn handle_command(cmd: Command) {
             match active_or(tab_id) {
                 Some(id) => {
                     if let Some(frame) = tab_browser(Some(id)).and_then(|b| b.main_frame()) {
+                        begin_navigation(id, &url);
+                        with_state(|s| {
+                            if let Some(tab) = s.tabs.iter_mut().find(|tab| tab.id == id) {
+                                tab.http_fallback =
+                                    crate::navigation::PublicHttpFallback::from_omnibox(
+                                        &input, &url,
+                                    );
+                            }
+                        });
                         frame.load_url(Some(&CefString::from(url.as_str())));
                     }
                     if let Some(view) = tab_view(id) {
@@ -476,21 +536,48 @@ pub fn handle_command(cmd: Command) {
             }
         }
         Command::Back { tab_id } => {
-            if let Some(b) = tab_browser(tab_id) {
+            if let Some(id) = active_or(tab_id)
+                && let Some(b) = tab_browser(Some(id))
+                && b.can_go_back() != 0
+            {
+                begin_history_navigation(id);
                 b.go_back();
             }
         }
         Command::Forward { tab_id } => {
-            if let Some(b) = tab_browser(tab_id) {
+            if let Some(id) = active_or(tab_id)
+                && let Some(b) = tab_browser(Some(id))
+                && b.can_go_forward() != 0
+            {
+                begin_history_navigation(id);
                 b.go_forward();
             }
         }
         Command::Reload { tab_id } => {
-            if let Some(b) = tab_browser(tab_id) {
-                b.reload();
+            let id = active_or(tab_id);
+            let failed = with_state(|s| {
+                s.tabs
+                    .iter()
+                    .find(|tab| Some(tab.id) == id)
+                    .and_then(|tab| tab.info.load_error.as_ref().map(|error| error.url.clone()))
+            });
+            if let (Some(id), Some(url)) = (id, failed) {
+                if let Some(frame) = tab_browser(Some(id)).and_then(|browser| browser.main_frame())
+                {
+                    begin_navigation(id, &url);
+                    frame.load_url(Some(&CefString::from(url.as_str())));
+                }
+            } else if let Some(browser) = tab_browser(tab_id) {
+                browser.reload();
             }
         }
         Command::Stop { tab_id } => {
+            with_state(|s| {
+                let id = tab_id.or(s.active);
+                if let Some(tab) = s.tabs.iter_mut().find(|tab| Some(tab.id) == id) {
+                    tab.http_fallback = None;
+                }
+            });
             if let Some(b) = tab_browser(tab_id) {
                 b.stop_load();
             }
@@ -573,7 +660,7 @@ fn layout_content(focus: bool) {
             s.start_open = !s.assistant_expanded
                 && s.tabs
                     .iter()
-                    .any(|tab| Some(tab.id) == s.active && tab.info.url.is_empty());
+                    .any(|tab| Some(tab.id) == s.active && tab.info.needs_trusted_page());
             (
                 s.tabs
                     .iter()
@@ -662,6 +749,8 @@ fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
             id,
             view: view.clone(),
             browser: None,
+            navigation_url: url.clone(),
+            http_fallback: None,
             info: TabInfo {
                 id,
                 url: if url == "about:blank" {
@@ -671,6 +760,7 @@ fn new_tab(url: Option<&str>, activate: bool) -> Option<TabId> {
                 },
                 title: "New Tab".into(),
                 loading: true,
+                pending_url: (url != "about:blank").then(|| url.clone()),
                 ..Default::default()
             },
         })
@@ -752,6 +842,45 @@ fn get_page_text(request_id: String) {
         });
         return;
     };
+    if let Some(error) = &info.load_error {
+        crate::bus::emit(Event::PageText {
+            request_id,
+            tab_id: Some(tab_id),
+            url: error.url.clone(),
+            title: info.title,
+            text: String::new(),
+            truncated: false,
+            error: Some(format!(
+                "The webpage did not load ({}). Retry or open another page before asking AI.",
+                error.name
+            )),
+        });
+        return;
+    }
+    if let Some(pending) = info.pending_url {
+        crate::bus::emit(Event::PageText {
+            request_id,
+            tab_id: Some(tab_id),
+            url: pending,
+            title: info.title,
+            text: String::new(),
+            truncated: false,
+            error: Some("The requested webpage is still loading. Wait before asking AI.".into()),
+        });
+        return;
+    }
+    if info.loading {
+        crate::bus::emit(Event::PageText {
+            request_id,
+            tab_id: Some(tab_id),
+            url: info.url,
+            title: info.title,
+            text: String::new(),
+            truncated: false,
+            error: Some("The webpage is still loading. Wait before asking AI.".into()),
+        });
+        return;
+    }
     if info.url.is_empty() {
         crate::bus::emit(Event::PageText {
             request_id,
@@ -1321,7 +1450,7 @@ wrap_request_handler! {
             let tab = browser_id(browser).and_then(tab_id_for_browser);
             let url = request.as_ref().map(|request| CefString::from(&request.url()).to_string()).unwrap_or_default();
             let method = request.as_ref().map(|request| CefString::from(&request.method()).to_string()).unwrap_or_default();
-            with_state(|s| {
+            let blocked = with_state(|s| {
                 let committed = s.tabs.iter().find(|t| Some(t.id) == tab).map(|t| t.info.url.clone());
                 let Some(guard) = s.agent_guard.as_mut().filter(|guard| Some(guard.tab_id) == tab) else { return 0 };
                 if url == guard.allowed_url && method == "GET" { return 0; }
@@ -1356,14 +1485,14 @@ wrap_request_handler! {
                             tracing::info!(from = %guard.allowed_url, to = %url, kind, "Guard: followed same-site redirect");
                             guard.redirects += 1;
                             guard.allowed_url = url.clone();
-                            guard.followed.push(url);
+                            guard.followed.push(url.clone());
                             return 0;
                         }
                         Redirect::CrossSite => {
                             if guard.redirect_proposal.is_none() {
                                 tracing::info!(from = %guard.allowed_url, to = %url, kind, "Guard: paused cross-site redirect for task authorization");
                                 guard.redirects += 1;
-                                guard.redirect_proposal = Some(url);
+                                guard.redirect_proposal = Some(url.clone());
                             }
                             return 1;
                         }
@@ -1381,7 +1510,12 @@ wrap_request_handler! {
                     "An unapproved {kind} was blocked ({destination}). Query/fragment details are omitted. Open the site manually or retry the task; no further agent action was accepted."
                 ));
                 1
-            })
+            });
+            if blocked == 0 && let Some(tab) = tab {
+                tracing::info!(tab, destination = %crate::diagnostics::short_url(&url), "Page navigation started");
+                begin_navigation(tab, &url);
+            }
+            blocked
         }
     }
 }
@@ -1419,7 +1553,8 @@ wrap_display_handler! {
             let Some(tab) = browser_id(browser).and_then(tab_id_for_browser) else { return };
             let title = title.map(|t| t.to_string()).unwrap_or_default();
             update_tab(tab, |t| {
-                t.title = if title.is_empty() || title == "about:blank" { "New Tab".into() } else { title };
+                t.title = if t.load_error.is_some() { "Could not open page".into() }
+                    else if title.is_empty() || title == "about:blank" { "New Tab".into() } else { title };
             });
         }
 
@@ -1454,7 +1589,70 @@ wrap_load_handler! {
                 t.can_go_forward = can_go_forward != 0;
                 if is_loading == 0 {
                     t.progress = 1.0;
+                    t.pending_url = None;
                 }
+            });
+        }
+
+        fn on_load_end(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            http_status_code: i32,
+        ) {
+            if frame.is_none_or(|frame| frame.is_main() == 0) { return; }
+            let Some(tab) = browser_id(browser).and_then(tab_id_for_browser) else { return };
+            let url = with_state(|s| s.tabs.iter().find(|item| item.id == tab).map(|item| item.info.url.clone()));
+            if let Some(url) = url {
+                tracing::info!(tab, http_status_code, destination = %crate::diagnostics::short_url(&url), "Main page load finished");
+            }
+        }
+
+        fn on_load_error(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            error_code: Errorcode,
+            error_text: Option<&CefString>,
+            failed_url: Option<&CefString>,
+        ) {
+            if error_code == Errorcode::ABORTED || frame.is_none_or(|frame| frame.is_main() == 0) {
+                return;
+            }
+            let Some(tab) = browser_id(browser).and_then(tab_id_for_browser) else { return };
+            let Some(failed_url) = failed_url.map(|url| url.to_string()) else {
+                tracing::error!(tab, ?error_code, "Main page load failed without a destination URL");
+                return;
+            };
+            let code = sys::cef_errorcode_t::from(error_code) as i32;
+            let name = error_text.map(|text| text.to_string()).unwrap_or_else(|| format!("Chromium error {code}"));
+            if !with_state(|s| s.tabs.iter().any(|item| item.id == tab && item.navigation_url == failed_url)) {
+                tracing::debug!(tab, destination = %crate::diagnostics::short_url(&failed_url), "Ignored a superseded main page load error");
+                return;
+            }
+            let fallback = with_state(|s| {
+                if s.agent_guard.as_ref().is_some_and(|guard| guard.tab_id == tab) {
+                    return None;
+                }
+                let item = s.tabs.iter_mut().find(|item| item.id == tab)?;
+                item.http_fallback.take().filter(|fallback| fallback.applies(&failed_url, code))
+            });
+            if let Some(fallback) = fallback
+                && let Some(frame) = tab_browser(Some(tab)).and_then(|browser| browser.main_frame())
+            {
+                tracing::warn!(tab, code, destination = %crate::diagnostics::short_url(&failed_url), fallback = %fallback.http,
+                    "Inferred HTTPS root connection failed; trying the public HTTP address once to follow the site's redirect. No user data is replayed.");
+                begin_navigation(tab, &fallback.http);
+                frame.load_url(Some(&CefString::from(fallback.http.as_str())));
+                return;
+            }
+            tracing::warn!(tab, code, error = %name, destination = %crate::diagnostics::short_url(&failed_url), "Main page load failed");
+            update_tab(tab, |info| {
+                info.pending_url = None;
+                info.load_error = Some(PageLoadError { url: failed_url, code, name });
+                info.loading = false;
+                info.progress = 1.0;
+                info.title = "Could not open page".into();
             });
         }
     }

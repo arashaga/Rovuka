@@ -1,0 +1,17 @@
+.navigation-error { height: 100%; overflow: auto; padding: 40px 24px; background: var(--cp-bg); color: var(--cp-text); user-select: text; }
+.navigation-error-card { width: 100%; max-width: 640px; margin: 40px auto; padding: 32px; border: 1px solid var(--cp-border); border-radius: 16px; background: var(--cp-surface); }
+.navigation-error-art { display: block; width: 80px; height: 64px; margin-bottom: 24px; color: var(--cp-accent); }
+.navigation-error-brand { color: var(--cp-text-muted); font-size: 12px; font-weight: 600; }
+.navigation-error h1 { margin: 12px 0; font-size: 28px; line-height: 1.2; }
+.navigation-error p { line-height: 1.6; }
+.navigation-error-url { display: block; padding: 16px; border-radius: 10px; background: var(--cp-surface-soft); overflow-wrap: anywhere; white-space: pre-wrap; font-family: Consolas, "Courier New", Courier, monospace; }
+.navigation-error-code, .navigation-error-note { color: var(--cp-text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.navigation-error-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+.navigation-error-actions button { min-height: 44px; }
+.navigation-error button:focus-visible { outline: 3px solid var(--cp-accent); outline-offset: 4px; }
+@media (max-width: 480px) {
+  .navigation-error { padding: 16px; }
+  .navigation-error-card { padding: 20px; margin: 16px auto; }
+  .navigation-error h1 { font-size: 24px; }
+  .navigation-error-actions { flex-direction: column; }
+}

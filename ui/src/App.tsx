@@ -22,6 +22,10 @@ export default function App() {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const activeTab = tabs.find((t) => t.id === active)
+  const address = activeTab?.pendingUrl || activeTab?.loadError?.url || activeTab?.url || ''
+  const parsedAddress = URL.canParse(address) ? new URL(address) : null
+  const externalHttp = parsedAddress?.protocol === 'http:'
+    && !['localhost', '127.0.0.1', '[::1]'].includes(parsedAddress.hostname)
 
   useEffect(
     () =>
@@ -48,11 +52,11 @@ export default function App() {
 
   // Keep the omnibox in sync with the active tab unless the user is typing.
   useEffect(() => {
-    if (!editing) setOmnibox(displayUrl(activeTab?.url ?? ''))
-  }, [activeTab?.url, active, editing])
+    if (!editing) setOmnibox(displayUrl(address))
+  }, [address, active, editing])
 
   useEffect(() => {
-    if (activeTab && displayUrl(activeTab.url) === '' && !activeTab.loading) {
+    if (activeTab && displayUrl(address) === '' && !activeTab.loading) {
       inputRef.current?.focus()
     }
   }, [active])
@@ -140,6 +144,7 @@ export default function App() {
 
         {findingsOpen && <span className="workspace-indicator" role="status">Research workspace</span>}
         <div className="omnibox">
+          {externalHttp && <span className="connection-state" title="This address uses unencrypted HTTP. Do not enter private information.">Not secure</span>}
           <input
             ref={inputRef}
             value={omnibox}
@@ -154,7 +159,7 @@ export default function App() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') submit()
               else if (e.key === 'Escape') {
-                setOmnibox(displayUrl(activeTab?.url ?? ''))
+                setOmnibox(displayUrl(address))
                 setEditing(false)
                 e.currentTarget.blur()
                 host.send({ type: 'focusContent' })

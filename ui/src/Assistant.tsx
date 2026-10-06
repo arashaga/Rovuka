@@ -4,6 +4,7 @@ import { apiRequest, readEvents, type ModelSettings, type Provider } from './mod
 import LocalModels from './LocalModels.tsx'
 import TaskMode from './TaskMode.tsx'
 import SafetyCenter from './SafetyCenter.tsx'
+import Reliability from './Reliability.tsx'
 
 interface ChatMessage {
   id: string
@@ -41,7 +42,7 @@ const defaults: Record<Provider, Pick<ModelSettings, 'baseUrl' | 'model' | 'apiV
 export default function Assistant() {
   const [settings, setSettings] = useState<ModelSettings | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [panel, setPanel] = useState<'chat' | 'local' | 'task' | 'safety'>('chat')
+  const [panel, setPanel] = useState<'chat' | 'local' | 'task' | 'safety' | 'reliability'>('chat')
   const [taskActive, setTaskActive] = useState(false)
   const [taskGoal, setTaskGoal] = useState('')
   const [taskPrepare, setTaskPrepare] = useState(false)
@@ -255,6 +256,7 @@ export default function Assistant() {
         <button aria-pressed={panel === 'task'} disabled={busy || taskActive} onClick={() => { setTaskGoal(''); setTaskPrepare(false); setTaskDraftKey(''); setPanel('task'); setSettingsOpen(false) }}>Task mode</button>
         <button aria-pressed={panel === 'local'} disabled={busy || taskActive} onClick={() => setPanel('local')}>Local models</button>
         <button aria-pressed={panel === 'safety'} disabled={busy || taskActive} onClick={() => { setPanel('safety'); setSettingsOpen(false) }}>Safety</button>
+        <button aria-pressed={panel === 'reliability'} disabled={busy || taskActive} onClick={() => { setPanel('reliability'); setSettingsOpen(false) }}>Reliability</button>
       </nav>}
 
       {workspaceRequest && busy && <p className="assistant-shortcut-notice" role="status">Your start-page shortcut will open when this response finishes.</p>}
@@ -273,6 +275,8 @@ export default function Assistant() {
         }} />
       ) : panel === 'safety' ? (
         <SafetyCenter />
+      ) : panel === 'reliability' ? (
+        <Reliability onActive={setTaskActive} />
       ) : settingsOpen ? (
         <form className="model-settings" onSubmit={saveSettings}>
           <div className="model-settings-title">

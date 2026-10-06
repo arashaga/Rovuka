@@ -8,6 +8,20 @@ pub enum ResearchPermission {
     AllResearch,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskPermission {
+    #[default]
+    AskEach,
+    AllSupported,
+}
+
+impl TaskPermission {
+    pub fn allows(self, kind: &str) -> bool {
+        self == Self::AllSupported && matches!(kind, "search" | "link" | "redirect" | "operation")
+    }
+}
+
 impl ResearchPermission {
     pub fn allows(self, kind: &str) -> bool {
         self == Self::AllResearch && matches!(kind, "search" | "link" | "redirect")
@@ -92,6 +106,12 @@ pub struct PermissionEvent {
 }
 
 impl PermissionEvent {
+    pub fn task(decision: &str, url: Option<String>) -> Self {
+        let mut event = Self::new(decision, url);
+        event.scope = "This task and tab: validated public research, search fields, filters, widgets and GET searches only; no transactions, messages, uploads or account changes".into();
+        event
+    }
+
     pub fn operation(decision: &str, url: Option<String>) -> Self {
         let mut event = Self::new(decision, url);
         event.scope =
@@ -129,6 +149,19 @@ mod tests {
         for kind in ["search", "link", "redirect"] {
             assert!(ResearchPermission::AllResearch.allows(kind));
             assert!(!ResearchPermission::AskEach.allows(kind));
+        }
+    }
+
+    #[test]
+    fn task_grant_covers_only_native_validated_capabilities() {
+        for kind in ["search", "link", "redirect", "operation"] {
+            assert!(TaskPermission::AllSupported.allows(kind));
+            assert!(!TaskPermission::AskEach.allows(kind));
+        }
+        for kind in [
+            "purchase", "booking", "submit", "upload", "download", "delete", "send",
+        ] {
+            assert!(!TaskPermission::AllSupported.allows(kind));
         }
     }
 

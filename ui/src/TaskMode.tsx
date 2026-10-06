@@ -215,7 +215,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
         <h2>Give the web a goal.</h2>
         <p>Find concrete options with direct links. Travel pairs flights and hotels; shopping compares products. Comparable observed prices sort lowest first.</p>
         <span className="local-badge">6 pages max · You control research permissions</span>
-        <p className="privacy-note">Research stays read-only. Optional preparation can fill public search fields and filters, with one approval per action. No bookings or payments. Unsupported website widgets require manual use.</p>
+        <p className="privacy-note">Research stays read-only. Optional preparation can fill public search fields and filters. Approve each action or approve all supported actions for this task. No bookings or payments. Unsupported website widgets require manual use.</p>
       </div>}
       {showSetup && <form className="task-form" onSubmit={event => {
         event.preventDefault()
@@ -231,7 +231,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
           setSharePage(false)
         }}>
           <option value="research">Research only (default)</option>
-          <option value="prepare">Prepare public search fields - approval for every action</option>
+          <option value="prepare">Prepare public search fields - choose your approval scope</option>
         </select>
         <label htmlFor="task-goal">{mode === 'prepare' ? 'What should I prepare on this page?' : 'What do you want to find out?'}</label>
         <textarea id="task-goal" rows={3} value={goal} disabled={active(task) || busy}
@@ -249,7 +249,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
           <option value="options">Actionable options · prices & direct links</option>
           <option value="brief">Research brief / explanation</option>
         </select></>}
-        {mode === 'prepare' && <p className="operator-caution">Opt-in operator preview: up to 12 exact actions on this public page and its approved links. Supply literal dates and filter values, for example 2026-11-20 and 2 adults. Each action is reviewed before execution. Existing form values are not shared with the model; website scripts can still send entered data. No POST or non-search submissions.</p>}
+        {mode === 'prepare' && <p className="operator-caution">Opt-in operator preview: up to 12 exact actions on this public page and its approved links. Supply literal dates and filter values, for example 2026-11-20 and 2 adults. Hotels.com searches for adults in one room use a reviewed GET shortcut after destination selection, without calendar or guest-picker clicks. Choose individual or task-wide approval; every action is revalidated. Page clicks, typing and scrolling take over and stop preparation. Existing form values are not shared with the model; website scripts can still send entered data. No POST or non-search submissions.</p>}
         <p className="privacy-note">{startMode === 'webSearch'
           ? 'Plans a search without reading or sharing the starting tab. You approve its query and URL before opening Google; this replaces the page in your active tab.'
           : `Reads ${pageTitle || 'your active webpage'}, not the whole web. Choose Search the web if this page is unrelated.`}
@@ -274,19 +274,20 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
                 {connectionError && active(task) ? 'Connection interrupted' : labels[task.status]}
               </span>
               {!active(task) && <h3>{task.mode === 'prepare' ? 'Preparation conversation' : 'Research conversation'}</h3>}
-              <p>{task.model} · {task.pagesRead}/{task.maxSteps} pages{task.mode === 'prepare' ? ' · Preparation preview' : ''}</p>
+              <p>{task.model} · {task.pagesRead}/{task.maxSteps} pages{task.mode === 'prepare' ? ' · Preparation preview' : ''}
+                {task.modelUsage.requests > 0 && ` · ${task.modelUsage.requests} model requests`}</p>
               {task.status === 'running' && <div className="task-live-step">
                 <strong aria-live="polite">{connectionError ? 'Status updates are unavailable; reconnecting.' : latestStep}</strong>
                 {!connectionError && <small>{stepSeconds}s on this step · {stepSeconds >= 20 ? 'Still waiting; Stop remains available.' : 'Updates appear as each step completes.'}</small>}
               </div>}
               {task.pending && <span className="approval-attention" role="status">Waiting for you — choose an approval below</span>}
             </div>
-            {active(task) && task.researchPermission === 'allResearch' && <aside className="research-grant" aria-label="Automatic research permission">
-              <strong>Automatic research · This task only</strong>
+            {active(task) && (task.taskPermission === 'allSupported' || task.researchPermission === 'allResearch') && <aside className="research-grant" aria-label="Automatic task permission">
+              <strong>Automatic {task.mode === 'prepare' ? 'preparation' : 'research'} · This task only</strong>
               <button className="assistant-secondary" disabled={busy}
-                onClick={() => void send('/api/agent/revoke-research', { taskId: task.id })}>Ask before each navigation</button>
+                onClick={() => void send('/api/agent/revoke', { taskId: task.id })}>{task.mode === 'prepare' ? 'Ask before each action' : 'Ask before each navigation'}</button>
               <details><summary>Permission scope</summary>
-                <p>Searches, observed links and their redirects only. No purchases, submissions or downloads. Expires when this run ends.</p>
+                <p>{task.mode === 'prepare' ? 'Validated public search fields, filters, widgets and GET searches only.' : 'Searches, observed links and their redirects only.'} No purchases, bookings, messages, uploads, account changes or non-search submissions. Expires when this run ends.</p>
                 <small>Revoking affects subsequent proposals. Use Stop to interrupt the current action.</small>
               </details>
             </aside>}
@@ -294,6 +295,20 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
               onClick={() => void send('/api/agent/stop', { taskId: task.id })}>Stop / take over</button>}
           </div>
           <SafetyNotice task={task} />
+          {active(task) && task.mode === 'prepare' && <p className="privacy-note">Preparation is controlling this webpage. Clicking, typing or scrolling on the page stops the task; assistant approvals and activity controls do not.</p>}
+          {task.requirements && <aside className="task-requirements" aria-label="Interpreted search requirements">
+            <strong>Exact search I understood</strong>
+            <p>{task.requirements.destination} · {task.requirements.checkIn} to {task.requirements.checkOut}
+              {' · '}{task.requirements.adults} adults · {task.requirements.rooms} room</p>
+            <small>Only your messages supply these values. Provider destination IDs come from the website, not the model.</small>
+          </aside>}
+          {task.issue && <aside className="task-recovery" aria-label="Task recovery">
+            <strong>{task.issue.category}</strong><p>{task.issue.recovery}</p>
+          </aside>}
+          {task.verification.verified && <aside className="task-verification" aria-label="Independent outcome verification">
+            <strong>Independently checked · {task.verification.checks} checks</strong>
+            <p>{task.verification.detail}</p>
+          </aside>}
           <div className="task-conversation" aria-label="Task conversation">
             {task.conversation.map((message, index) => <article key={index} className={`task-message ${message.role}`}>
               <strong>{message.role === 'user' ? 'You' : 'Assistant'}</strong>
@@ -313,8 +328,8 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
           </form>}
           {task.pending && (
             <div className="task-approval" ref={confirmation} tabIndex={-1} role="region" aria-label={task.pending.kind === 'operation' ? 'Exact page action approval' : 'Navigation approval'}>
-              {task.pending.operation ? <OperationApproval task={task} busy={busy} onApprove={allow => void send('/api/agent/approve', {
-                taskId: task.id, approvalId: task.pending?.id, allow,
+              {task.pending.operation ? <OperationApproval task={task} busy={busy} onApprove={(allow, approveAll = false) => void send('/api/agent/approve', {
+                taskId: task.id, approvalId: task.pending?.id, allow, approveAll,
               })} /> : <>
               <span className="local-eyebrow">Your approval is required</span>
               <h3>{task.pending.kind === 'search' ? 'Run this web search?' : task.pending.kind === 'redirect' ? 'Follow this redirect to another website?' : 'Follow this link?'}</h3>
@@ -325,12 +340,11 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
                   onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: false })}>Decline & stop</button>
                 <button className="assistant-primary approval-allow" disabled={busy}
                   onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true })}>Approve navigation</button>
-                {task.mode !== 'prepare' && <button className="assistant-primary approval-allow-all" disabled={busy}
-                  onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true, allowAllResearch: true })}>Allow all research for this task</button>
-                }
+                <button className="assistant-primary approval-allow-all" disabled={busy}
+                  onClick={() => void send('/api/agent/approve', { taskId: task.id, approvalId: task.pending?.id, allow: true, approveAll: true })}>Approve all for this task</button>
               </div>
               <p className="approval-scope">{task.mode === 'prepare'
-                ? 'This approves only this exact navigation. Research grants never apply to preparation. Further page actions require separate approvals; no booking, payment, messages or non-search submissions are authorized.'
+                ? 'Approve all covers supported public search actions and GET navigation in this task only. Each action is audited and revalidated. No booking, payment, messages, uploads or non-search submissions. Revoke or Stop at any time.'
                 : 'Allow all covers up to six page reads across websites in this run, including sharing their content with your model. It never authorizes bookings, buying, form submissions, uploads or downloads. You can revoke it or stop at any time.'}</p>
               <details><summary>Navigation & privacy details</summary>
                 <p className="privacy-note">This replaces the page in this tab and shares its content with your model. Same-site redirects are followed; redirects to another website pause for approval (or your research permission). Checkout/account pages, form submissions, popups and downloads are blocked. Normal site scripts, their network requests and signed-in cookies still apply; this is not an isolated browsing profile.</p>
@@ -346,9 +360,9 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
             <DiagnosticActions task={task} />
           </article>}
           {task.message && task.status !== 'needsInput' && <article className="task-result" ref={resultCard} tabIndex={-1} aria-label="Task guidance">
-            <h3>{task.mode === 'prepare' ? 'Preparation requires manual handling' : 'I could not verify this'}</h3>
+            <h3>{task.status === 'stopped' ? 'Why the task stopped' : task.mode === 'prepare' ? 'Preparation requires manual handling' : 'I could not verify this'}</h3>
             <div className="chat-text">{task.message}</div>
-            <p className="privacy-note">{task.mode === 'prepare' ? 'Unsupported actions require manual use. No booking or payment was authorized; any already executed actions remain on the page.' : 'This is not a completed research result. No booking was made.'}</p>
+            <p className="privacy-note">{task.status === 'stopped' ? 'No further task actions will run. Retry with my details preserves your request as an editable draft and requires fresh consent and approval.' : task.mode === 'prepare' ? 'Unsupported actions require manual use. No booking or payment was authorized; any already executed actions remain on the page.' : 'This is not a completed research result. No booking was made.'}</p>
           </article>}
           {task.answer && task.mode !== 'prepare' && <article className="task-result" ref={resultCard} tabIndex={-1} aria-label="Research brief">
             <span className="local-eyebrow">Your research brief</span>
@@ -370,7 +384,7 @@ export default function TaskMode({ onActive, expanded, initialGoal = '', initial
                 {task.mode === 'prepare' ? 'View preparation' : task.answer ? 'View findings' : 'View research trail'}
               </button>
               <button className="assistant-secondary" onClick={newTask}>Start a new task</button>
-              {task.error && <button className="assistant-secondary" onClick={retryTask}>Retry with my details</button>}
+              {(task.error || task.status === 'stopped') && <button className="assistant-secondary" onClick={retryTask}>Retry with my details</button>}
             </div>
             <p className="privacy-note">Tasks and conversation stay in memory for this browser session only. Preparation retains your previous research findings. Research permissions never authorize page actions; purchases and bookings are not automated.</p>
           </>}

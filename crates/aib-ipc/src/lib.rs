@@ -110,6 +110,24 @@ pub struct TabInfo {
     pub progress: f64,
     pub can_go_back: bool,
     pub can_go_forward: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_error: Option<PageLoadError>,
+}
+
+impl TabInfo {
+    pub fn needs_trusted_page(&self) -> bool {
+        self.load_error.is_some() || (self.url.is_empty() && self.pending_url.is_none())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageLoadError {
+    pub url: String,
+    pub code: i32,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -397,5 +415,29 @@ mod tests {
         assert!(json.contains(r#""type":"pageText""#));
         assert!(json.contains(r#""requestId":"req-1""#));
         assert!(json.contains(r#""tabId":4"#));
+    }
+
+    #[test]
+    fn navigation_status_is_optional_for_existing_tab_snapshots() {
+        let mut tab: TabInfo = serde_json::from_str(
+            r#"{"id":1,"url":"","title":"New Tab","favicon":null,"loading":false,"progress":1,"canGoBack":false,"canGoForward":false}"#,
+        )
+        .unwrap();
+        assert!(tab.needs_trusted_page());
+        let original = serde_json::to_value(&tab).unwrap();
+        assert!(original.get("pendingUrl").is_none());
+        assert!(original.get("loadError").is_none());
+        tab.pending_url = Some("https://site.test".into());
+        assert!(!tab.needs_trusted_page());
+        tab.load_error = Some(PageLoadError {
+            url: "https://site.test".into(),
+            code: -102,
+            name: "ERR_CONNECTION_REFUSED".into(),
+        });
+        assert!(tab.needs_trusted_page());
+        let value = serde_json::to_value(&tab).unwrap();
+        assert_eq!(value["pendingUrl"], "https://site.test");
+        assert_eq!(value["loadError"]["code"], -102);
+        assert_eq!(serde_json::from_value::<TabInfo>(value).unwrap(), tab);
     }
 }

@@ -1,5 +1,5 @@
 export type TaskStatus = 'running' | 'awaitingApproval' | 'completed' | 'stopped' | 'failed' | 'needsInput' | 'noEvidence'
-export type OperationKind = 'fill' | 'select' | 'click' | 'scroll' | 'submitSearch'
+export type OperationKind = 'fill' | 'select' | 'click' | 'scroll' | 'submitSearch' | 'hotelSearch'
 
 export interface OperationPreview {
   kind: OperationKind
@@ -62,6 +62,7 @@ export interface Task {
   report: ResearchReport | null
   searches: { query: string; url: string; sourceId: number | null; vertical: 'web' | 'flights' | 'hotels' }[]
   researchPermission: 'askEach' | 'allResearch'
+  taskPermission: 'askEach' | 'allSupported'
   permissionEvents: { at: string; decision: string; scope: string; url: string | null }[]
   compareOptions: boolean
   build: string
@@ -70,6 +71,10 @@ export interface Task {
   auditEnabled: boolean
   auditError: string | null
   mode: 'research' | 'prepare'
+  requirements: { destination: string; checkIn: string; checkOut: string; adults: number; rooms: number } | null
+  verification: { checks: number; verified: boolean; detail: string }
+  issue: { category: string; recovery: string; retryable: boolean } | null
+  modelUsage: { requests: number; readerRequests: number; elapsedMs: number; repairs: number }
   actions: { id: string; kind: OperationKind; target: string; value: string | null; status: 'awaitingApproval' | 'approved' | 'executed' | 'stale' | 'failed' | 'cancelled' | 'declined' }[]
 }
 

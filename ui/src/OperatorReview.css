@@ -6,6 +6,10 @@
 .operator-exact-action dd, .operator-search-fields dd { margin: 0; overflow-wrap: anywhere; }
 .operator-exact-action code { display: block; font: 12px/1.6 Consolas, "Courier New", Courier, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .operator-caution { color: var(--cp-text-muted); font-size: 12px; line-height: 1.6; }
+.operator-shortcut { padding: 12px; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-accent-soft); color: var(--cp-text); font-size: 12px; line-height: 1.6; }
+.operator-hotel-summary { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--cp-accent); border-radius: 10px; background: var(--cp-accent-soft); }
+.operator-hotel-summary dt { font-size: 11px; color: var(--cp-text-muted); font-weight: 700; }
+.operator-hotel-summary dd { margin: 4px 0 0; color: var(--cp-text); overflow-wrap: anywhere; }
 .operator-review .approval-choices { position: static; }
 .operator-search-fields { padding: 12px; border: 1px solid var(--cp-border); border-radius: 10px; }
 .operator-search-fields summary { font-size: 12px; font-weight: 700; cursor: pointer; }

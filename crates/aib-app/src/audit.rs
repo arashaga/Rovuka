@@ -21,6 +21,41 @@ pub struct Event {
     pub origin: Option<String>,
 }
 
+pub(crate) fn write_private_json(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| parent.is_absolute())
+        .context("Private JSON storage requires an absolute parent directory")?;
+    let name = path
+        .file_name()
+        .context("Private JSON storage requires a filename")?
+        .to_string_lossy();
+    let temporary = parent.join(format!("{name}.{}.tmp", crate::server::random_token()));
+    let result: anyhow::Result<()> = (|| {
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err()
+        && temporary.exists()
+        && let Err(error) = fs::remove_file(&temporary)
+    {
+        tracing::warn!("Could not clean up a private JSON temporary file: {error}");
+    }
+    result.context("Could not persist private JSON metadata")
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Record {
@@ -146,35 +181,9 @@ impl Store {
             bail!("Task audit record exceeded its storage bound");
         }
         let path = self.root.join(format!("{}.json", record.id));
-        let temporary = self.root.join(format!(
-            "{}.{}.tmp",
-            record.id,
-            crate::server::random_token()
-        ));
-        let result: anyhow::Result<()> = (|| {
-            let mut file = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temporary)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                file.set_permissions(fs::Permissions::from_mode(0o600))?;
-            }
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temporary, &path)?;
-            self.prune(&record.id)?;
-            Ok(())
-        })();
-        if result.is_err()
-            && temporary.exists()
-            && let Err(error) = fs::remove_file(&temporary)
-        {
-            tracing::warn!("Could not clean up a task audit temporary file: {error}");
-        }
-        result.context("Could not persist the redacted task audit")
+        write_private_json(&path, &bytes)?;
+        self.prune(&record.id)?;
+        Ok(())
     }
 
     fn paths(&self) -> anyhow::Result<Vec<PathBuf>> {

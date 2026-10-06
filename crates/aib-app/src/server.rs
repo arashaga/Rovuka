@@ -29,6 +29,7 @@ use std::{
 };
 
 mod agent_api;
+mod evaluation_api;
 mod local_api;
 mod safety_api;
 
@@ -75,6 +76,8 @@ struct AppState {
     settings: RwLock<ModelSettings>,
     downloads: Arc<tokio::sync::Semaphore>,
     agent: Arc<crate::agent::Service>,
+    evaluations: Arc<crate::evaluations::Service>,
+    model_jobs: std::sync::Mutex<()>,
 }
 
 /// Start the server on a background tokio runtime and return once it is listening.
@@ -82,6 +85,7 @@ pub fn start() -> anyhow::Result<ServerInfo> {
     let token = random_token();
     let model_settings = aib_models::load_settings()?;
     let audit = Arc::new(crate::audit::Store::open()?);
+    let evaluations = Arc::new(crate::evaluations::Service::open()?);
     let (tx, rx) = std::sync::mpsc::channel();
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let token_for_thread = token.clone();
@@ -126,6 +130,8 @@ pub fn start() -> anyhow::Result<ServerInfo> {
                     settings: RwLock::new(model_settings),
                     downloads: Arc::new(tokio::sync::Semaphore::new(1)),
                     agent: Arc::new(crate::agent::Service::new(audit)),
+                    evaluations,
+                    model_jobs: std::sync::Mutex::new(()),
                 });
                 crate::bus::set_agent(state.agent.clone());
                 let app = Router::new()
@@ -153,6 +159,24 @@ pub fn start() -> anyhow::Result<ServerInfo> {
                     .route(
                         "/api/agent/revoke-research",
                         post(agent_api::revoke_research).options(preflight),
+                    )
+                    .route(
+                        "/api/agent/revoke",
+                        post(agent_api::revoke_research).options(preflight),
+                    )
+                    .route(
+                        "/api/evaluations",
+                        get(evaluation_api::view)
+                            .post(evaluation_api::start)
+                            .options(preflight),
+                    )
+                    .route(
+                        "/api/evaluations/stop",
+                        post(evaluation_api::stop).options(preflight),
+                    )
+                    .route(
+                        "/api/evaluations/import",
+                        post(evaluation_api::import).options(preflight),
                     )
                     .route(
                         "/api/agent/reply",
@@ -645,6 +669,8 @@ mod tests {
             settings: RwLock::new(ModelSettings::default()),
             downloads: Arc::new(tokio::sync::Semaphore::new(1)),
             agent: Arc::new(crate::agent::Service::default()),
+            evaluations: Arc::new(crate::evaluations::Service::for_auth_tests()),
+            model_jobs: std::sync::Mutex::new(()),
         };
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:12345"));
@@ -663,6 +689,8 @@ mod tests {
             settings: RwLock::new(ModelSettings::default()),
             downloads: Arc::new(tokio::sync::Semaphore::new(1)),
             agent: Arc::new(crate::agent::Service::default()),
+            evaluations: Arc::new(crate::evaluations::Service::for_auth_tests()),
+            model_jobs: std::sync::Mutex::new(()),
         };
         let mut headers = HeaderMap::new();
         headers.insert(

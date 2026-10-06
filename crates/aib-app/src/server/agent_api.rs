@@ -44,6 +44,10 @@ pub(super) async fn start(
         .expect("model settings lock poisoned")
         .clone();
     let result = (|| {
+        let _jobs = state.model_jobs.lock().expect("model job lock poisoned");
+        if state.evaluations.active() {
+            anyhow::bail!("Stop or finish the model evaluation before starting a browser task");
+        }
         aib_models::validate_settings(&settings)?;
         let key = if aib_models::requires_api_key(&settings) {
             Some(
@@ -89,6 +93,8 @@ pub(super) struct ApprovalRequest {
     allow: bool,
     #[serde(default)]
     allow_all_research: bool,
+    #[serde(default)]
+    approve_all: bool,
 }
 
 pub(super) async fn approve(
@@ -99,16 +105,23 @@ pub(super) async fn approve(
     let Some(origin) = api_authorized(&headers, &state) else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    control_response(
-        &state.agent,
-        &origin,
+    let result = if request.approve_all {
+        state.agent.approve_scoped(
+            &request.task_id,
+            &request.approval_id,
+            request.allow,
+            request.allow_all_research,
+            request.approve_all,
+        )
+    } else {
         state.agent.approve(
             &request.task_id,
             &request.approval_id,
             request.allow,
             request.allow_all_research,
-        ),
-    )
+        )
+    };
+    control_response(&state.agent, &origin, result)
 }
 
 #[derive(Deserialize)]

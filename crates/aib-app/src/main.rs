@@ -5,13 +5,18 @@ mod audit;
 mod bus;
 mod cdp;
 mod diagnostics;
+mod evaluations;
+mod evidence;
 mod graphics;
 mod host;
+mod navigation;
 mod offers;
 mod policy;
 mod privacy;
 mod protocol;
 mod server;
+mod structured;
+mod verification;
 
 use cef::*;
 

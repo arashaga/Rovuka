@@ -29,6 +29,8 @@ export interface TabInfo {
   progress: number
   canGoBack: boolean
   canGoForward: boolean
+  pendingUrl?: string | null
+  loadError?: { url: string; code: number; name: string } | null
 }
 
 export type DownloadState = 'inProgress' | 'complete' | 'canceled' | 'interrupted'

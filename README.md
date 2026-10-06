@@ -2,7 +2,7 @@
 
 An AI-first, local-first task browser built on Chromium (CEF) with a Rust host and a React/TypeScript chrome UI.
 
-> Status: **Reader research + privacy/audit + Safe Browser Operator preview**. Model studio and page Q&A work; research provides numbered options with observed direct-site handoffs. Opt-in preparation can fill public search fields and open reviewed GET searches, with exact approval for every action. General website automation, bookings/payments, the complete safety roadmap, bundled inference and installers are not shipped yet.
+> Status: **Phase 5 reliability + task-wide approval**. Model studio, page Q&A, source-grounded research, privacy/audit and opt-in public search preparation work. Choose one-action approval or **Approve all for this task**; every supported action still gets native checks and a fresh audited permit. A Reliability workspace measures selected-model protocol capabilities. General website automation, bookings/payments, production sandboxing, bundled inference and installers are not shipped yet.
 
 Porting guidance is maintained in the local [Mac OS parity](mac-os-parity.md)
 guide, which is intentionally Git-ignored. Copy it separately when moving to
@@ -24,7 +24,7 @@ behavior, dependencies, or packaging requirements.
 
 - Rust (stable, edition 2024)
 - Visual Studio 2022 Build Tools with the C++ workload (MSVC, CMake, Ninja)
-- Node.js 20+
+- Node.js 22.12+ (the native test harness uses the built-in WebSocket client)
 - CEF binaries: set `CEF_PATH` (e.g. `%USERPROFILE%\.local\share\cef`). The build downloads them if missing.
 
 CMake/Ninja from VS Build Tools must be on `PATH`:
@@ -53,7 +53,7 @@ Flags:
 Close the browser before rebuilding; running CEF processes lock `rovuka.exe` and
 the build fails. Always run the freshly built `.\target\debug\rovuka.exe`. If you
 are unsure which build is running, check the first line of the diagnostic log or
-the **Build** line on any failure screen (version, executable path and build time).
+the **Build** line on a task failure screen (version, executable path and build time).
 Native fixtures can select an alternate executable with the absolute
 `AIB_TEST_BROWSER_EXE` environment variable; they still use disposable profiles.
 
@@ -95,9 +95,51 @@ tab, not a token-bearing website in tab history. Its authenticated UI URL stays
 out of the omnibox, tab snapshots and model-facing observations. Page Q&A
 explicitly refuses to share it: open a real webpage first. Themes, responsive
 320px layouts, focusable controls and reduced-motion artwork use the existing
-Clawpilot design. What's new now introduces the approved public-search
-preparation preview. Runtimes, booking/non-search submission automation and
-installers are still not bundled.
+Clawpilot design. What's new introduces task-wide approval, independently
+checked search results and selected-model capability checks. Runtimes,
+booking/non-search submission automation and installers are still not bundled.
+
+## Ordinary browsing and navigation errors
+
+Type or paste an address into the toolbar and press Enter. Ordinary Chromium
+browsing does not require a configured model. The address bar keeps the requested
+address while a page is loading, separately from its actual committed document
+URL; agent guards still use the committed URL.
+
+Bare hostnames try HTTPS first. If a manually entered, inferred HTTPS **root**
+fails with an eligible connection error, Rovuka retries its HTTP root once and
+follows the site's real redirects. Typing `hotel.com` therefore reaches secure
+Hotels.com through its actual redirect; there is no hardcoded domain alias.
+Explicit HTTPS, addresses with paths/query/fragment data, credentials, ports,
+IP addresses, certificate/SSL errors, DNS/offline errors and agent navigation
+do not get this fallback. If an external address remains HTTP, the toolbar shows
+**Not secure**; do not enter private information.
+
+A main-page connection, DNS, timeout or certificate failure displays a local
+**Couldn't open this page** screen rather than leaving the welcome page visible
+with an empty address. It shows the failed address and Chromium error:
+
+- **Try again** and toolbar **Reload** retry that exact failed destination,
+  not the previously loaded document.
+- **Edit address** focuses the address bar without losing the failed address.
+- **Go back**, when history permits, returns to the previous website or blank
+  welcome tab. Cached Back/Forward restoration clears the previous error state.
+
+The error uses the separate trusted start BrowserView; its internal authenticated
+URL never enters website history, tab metadata or model observations. Failed or
+still-loading pages explicitly refuse page Q&A; failed pages cannot be read or
+prepared by an AI task. Cancelling or superseding navigation is not shown as a
+network error, and a failed iframe does not hide its successful main page.
+
+Website-provided error/challenge documents (including HTML 404/429 responses)
+remain website content. Rovuka does not bypass certificate checks or website
+verification. An explicit `https://hotel.com/` can still fail rather than
+downgrade. The Hotels.com service uses `https://www.hotels.com/`, and may require
+manual verification.
+
+Native navigation-start, load-failure and main-response status diagnostics are
+written to the existing local log. These new events omit URL query/fragment data;
+other task diagnostics retain their existing local-only privacy limitations.
 
 ## GPU context errors (Windows)
 
@@ -178,7 +220,7 @@ This does not provide verified live availability or prices.
    you grant automatic research for this task.
    **Approve navigation**
    replaces the current page; **Decline & stop** performs no navigation.
-   **Allow all research for this task** approves this proposal and subsequent
+   **Approve all for this task** approves this proposal and subsequent
    search/observed-link navigation in this run. It does not authorize transactions.
 7. The outcome distinguishes **More details needed**, **No verified result**,
    protocol failure and **Your results are ready**. When the assistant asks a
@@ -224,7 +266,7 @@ without user activation**:
   hops. Each hop is listed in Activity and the Permission trail.
 - **Another website**: the load is cancelled before it starts and the task
   pauses with **Follow this redirect to another website?** showing the real
-  destination. **Allow all research for this task** also covers these redirects
+  destination. **Approve all for this task** also covers these redirects
   and records them. Declining stops the task; the other site is never opened.
   At most 3 cross-site hops per approved navigation.
 - **Never followed**: checkout/account-changing destinations (same heuristic as
@@ -304,7 +346,7 @@ parameters; native code validates them and builds a fixed `www.google.com` URL w
   parameter and `q` is only `Hotels near <place>`. Google's natural-language parser
   silently drops dates when the place contains a comma and shows default one-night
   prices. The model multiplies the room total by the number of rooms.
-- Both use the research permission (approve, or allow all research) and appear in
+- Both use the task's research permission (approve once, or approve all for this task) and appear in
   **Searches performed** labelled **Flights** or **Hotels**. Their result pages are
   directly read `page` sources, so quoted fares and stay totals can pass native price
   verification; ordinary web-search pages remain leads.
@@ -338,6 +380,12 @@ verbosity with `RUST_LOG`, default `info`). It records:
   cross-site redirects paused, blocked navigations/redirects, same-document URL
   updates adopted, and any task-tab URL change that was **not** approved;
 - final status, page count, option count, or the full error cause chain.
+
+Preparation revalidation also records a fixed reason code (changed document,
+form/dialog identity, visibility, control state or destination), without
+logging input-event keys, coordinates or extra field values. Stale actions stay
+unexecuted. Activity explains the bounded fresh observation/permit retry rather
+than presenting it as a completed action.
 
 It stays on this machine and never contains API keys or page text, but it does
 contain your task text, visited URLs and model-output excerpts; delete it anytime.
@@ -481,19 +529,22 @@ it does not navigate the web tab to a token-bearing UI URL or execute model HTML
 Model strings are rendered as React text. Findings and conversations are
 session-only, not saved/exported reports yet.
 
-### Phase 4 increment: research permission controls
+### Task-scoped approval controls
 
 - Defaults to **ask before each navigation**. Pending approvals have a visible
   waiting banner, prominent primary button and a gentle halo. The halo respects
   reduced-motion preferences; it never auto-confirms an action.
-- **Allow all research for this task** is explicit, cross-site and session-only.
+- **Approve all for this task** is explicit, cross-site and session-only.
   It authorizes validated searches, observed-link GET navigation and redirects
   those pages make to other websites for this
   task, with the existing six-page/ten-minute limits. It includes sharing read
   page content with the selected model and using the browser's existing profile.
-- The automatic-research banner includes **Ask before each navigation** to
-  revoke the grant for subsequent proposals. Use **Stop / take over** to cancel
-  current model/reader waits; a previously issued load cannot be unsent.
+  In opt-in preparation, it also covers supported public search operations,
+  never transactions or arbitrary form submissions.
+- The automatic-task banner includes **Ask before each navigation** in research
+  or **Ask before each action** in preparation to revoke subsequent authorization.
+  Use **Stop / take over** to cancel current model/reader waits; an action already
+  consumed by the native executor cannot be undone.
 - Grants expire on completion, failure, no evidence, cancellation or manual
   takeover, and never transfer to a new task. Stale approvals cannot grant them.
 - The native guard still blocks non-GET navigation, popups, downloads and
@@ -505,12 +556,18 @@ session-only, not saved/exported reports yet.
   activity still apply.
 - A timestamped **Permission trail** records one-time approvals, automatic
   navigation authorization, revocation and expiry, with exact destination URLs.
-  It appears in Activity and the final research trail, in memory only.
+  Exact destinations appear in the session trail; the durable audit stores only
+  metadata, origins and permission decisions.
 
-This is not the whole safety phase: isolated task profiles, a quarantined LLM
-reader, comprehensive personal-data detection, a critic and strong transaction
-confirmation remain before broader automation. Native privacy checks and a
-durable, metadata-only audit are now implemented as described below.
+The legacy research-only API grant remains narrower and never authorizes
+preparation. The new task-wide grant is separately explicit, scoped to the same
+task/tab, and cannot override native action limits, privacy checks, audit errors,
+document/control checks or unsupported capabilities.
+
+Isolated task profiles, comprehensive personal-data detection, a general LLM
+critic and strong transaction confirmation remain before broader automation.
+Native privacy checks, a no-tools task reader, independent outcome checks and
+durable metadata-only audit are implemented as described below.
 
 ### Safe Browser Operator: public search preparation preview
 
@@ -521,26 +578,67 @@ capability, not permission added to an existing research grant.
    research option and choose **Prepare on this page**. The latter opens a new
    provider tab and an editable draft; it does not start, share pages or approve
    anything. Your previous completed research findings stay available.
-2. In **Ask AI → Task mode**, select **Prepare public search fields - approval
-   for every action**. Preparation starts on the current webpage, not the
+2. In **Ask AI → Task mode**, select **Prepare public search fields - choose
+   your approval scope**. Preparation starts on the current webpage, not the
    trusted welcome page. Configure/select your model as usual.
 3. Supply literal values and ISO dates. For example:
 
-   > Prepare Cancun for 2 adults, check-in 2026-11-20 and check-out 2026-11-25.
-   > Open the search only if it is a public GET search. Stop before booking or payment.
+   > Find hotels in Cancun from 2026-11-20 to 2026-11-25 for two adults,
+   > one room. Do not book.
 
-   The model must ask for an exact date or observed option label if your
-   requirements do not literally include it; it cannot invent or transform a
-   value using webpage instructions.
+   Use future ISO dates within the supported horizon. This complete, basic
+   Hotels.com request uses a native shortcut described below. For other
+   compatible controls, missing exact dates or observed option labels require
+   clarification; webpage instructions cannot supply invented values. English
+   month names, relative dates and ambiguous numeric dates are not automatically
+   normalized by the verified hotel shortcut.
 4. Explicitly allow sharing task pages, then choose **Start task**. Review the
    website, exact control and value before **Approve this action only**.
-   GET searches additionally show the full destination and every current form
-   parameter, including existing values. Each operation needs a new approval.
+   GET searches additionally show the full destination and every parameter that
+   will be sent. Generic GET searches include existing form values; the
+   Hotels.com shortcut forwards only its reviewed nine fields.
+   Or choose **Approve all for this task** once to authorize subsequent supported
+   operations. Every operation still needs a fresh exact, single-use native
+   permit and successful audit persistence; it is not permission to book.
 5. Watch **Page actions** and live Activity. **Stop / take over**, tab changes,
    manual navigation or trusted input on the webpage cancel further preparation.
    An already executing approved action may finish; actions are not rolled back.
 6. Review the prepared page and continue manually. **Return to previous research
    findings** reopens your original shortlist without another model call.
+
+**Practical Hotels.com shortcut.** On the verified public GET search form,
+Rovuka supports both the inline destination input and the compact destination
+dialog, including its suggestions rendered outside the form. It performs:
+
+1. Open the destination dialog, if the compact layout requires it.
+2. Enter your exact city.
+3. Select the website's matching city suggestion, not an airport or similarly
+   named neighborhood. A genuinely ambiguous city needs a destination choice.
+4. Open the reviewed GET search with your exact check-in/out and party.
+
+That means **three actions inline, four in the compact layout**, or fewer
+when the exact city is already accepted. Choose individual approvals or **one
+task-wide approval**. The complete supported native request needs
+no model calls or repeated manual suggestion, calendar or guest-picker steps.
+The final review displays destination, dates and adults/room prominently; its
+nine technical parameters are expandable. The selected location and region ID
+come from the current website, never a guessed production constant. No raw
+form submission, `FormData`, opaque fields or POST handler is used, and the
+result URL must retain the verified search route and every reviewed parameter.
+The independent verifier also checks the displayed result dates and
+adult/traveler/room summary; a correct URL alone is not sufficient.
+
+This shortcut accepts labelled future ISO dates within 366 days, **1-9 adults
+and exactly one room**. Child ages and multiple-room allocations are explicitly
+unsupported, not silently omitted. The zero-model shortcut recognizes the
+original complete prepare/open-search request and common basic wording such as
+the example above, including number-word adults/rooms. Flexible wording uses a
+strict user-only structured resolver, not webpage defaults. Additional price,
+amenity or other requirements must not be silently dropped or presented as an
+applied filter.
+It is search preparation, not a guarantee of availability, booking or universal
+hotel-widget support. Site challenges still require manual verification, and
+ordinary website notices may need dismissing.
 
 Supported controls are labeled public-search text/search/date/number/time/month
 inputs, single-choice filters, limited calendar/guest/filter buttons, disclosure
@@ -555,12 +653,23 @@ The separate strict `browser_operator` protocol accepts numeric observed control
 IDs, not model scripts, selectors, coordinates or invented URLs. Native
 single-use permits expire after two minutes and require successful audit
 persistence before execution. The isolated-world executor rechecks the exact
-document, node, URL, mutation revision and current value. Replaced controls and
-value-only changes need a fresh observation and approval; reloads cannot reuse
-an old document's controls. Limits are 12 executed actions, six page reads,
+document, node, URL and current value. Generic controls also require the whole
+document's mutation revision. Verified hotel controls instead check their full
+destination/region state and immutable form/dialog identity, so unrelated
+advertisement churn does not force repeated approvals. Replaced controls/forms,
+value-only changes and reloads still invalidate old approvals. Site readiness
+and suggestions get bounded waits; trusted manual input during waiting stops
+the task. A stopped task now explains whether a webpage click, keyboard input,
+scrolling, a browser command or the Stop button took over. The stopped run keeps
+its reason and offers **Retry with my details**, which prefills an editable draft,
+resets sharing consent and requires fresh approval; it never resumes or replays
+automatically. While preparation is running, use the assistant panel to review
+Activity or approvals: clicking, typing or scrolling on the **webpage** hands
+control back to you and expires the task grant. Limits are 12 executed actions, six page reads,
 three cross-site redirect hops per action, five clarification replies and ten
-minutes per task. **Allow all research never authorizes preparation**, including
-its cross-site redirects.
+minutes per task. **A legacy research-only grant never authorizes preparation**,
+including its cross-site redirects. Explicit supported-task authorization does
+not remove any of these checks or limits.
 
 Input values and opaque option values are excluded from the model-facing
 control snapshot. Approved action values remain in the session trail, not the
@@ -570,9 +679,98 @@ reader audit records still load as research with zero page actions.
 **This is not general-purpose or transaction-safe automation.** Website scripts
 can transmit an entered value immediately using normal signed-in cookies, and
 GET requests can have side effects. Labels and URL heuristics cannot prove that
-a website is safe. A quarantined LLM reader, independent critic, isolated task
-profiles and production sandboxing are still deferred. No booking/payment is
+a website is safe. A general LLM critic, isolated task profiles and production
+sandboxing are still deferred. No booking/payment is
 authorized by this preview; do not use sensitive or transactional pages.
+
+### Phase 5: reliability and model capabilities
+
+**Requirements come from the user, not the website.** Hotel preparation
+displays the interpreted destination, check-in/out ISO dates, adult count and
+room count before approval. A flexible-wording resolver receives only user
+messages and the host date, with a strict `hotel_requirements` schema. Native
+checks require literal destination, exact date roles and matching counts; known
+values cannot be changed or omitted to ask redundant questions. Latest explicit
+user corrections are respected. Missing/ambiguous requirements need clarification;
+unsupported extra constraints fail explicitly rather than completing a partial
+basic search. Repeated already-answered questions stop instead of looping.
+
+**Page interpretation is separate from acting.** Research page text goes first
+to a no-tools reader returning bounded factual quotes. Native code checks every
+quote against the original protected page; fabricated, masked and recognized
+instruction-like quotes are rejected. The actor receives the quote projection
+and observed source/link IDs, not raw webpage prose. Preparation receives safe
+control metadata, user messages and executed actions, not raw page text or input
+values. Labels and quotes are still untrusted: this reduces injection risk, not
+guarantees immunity. Page Q&A retains its separate explicit sharing/privacy path.
+Research normally adds one reader request per page, so cloud usage can cost more.
+
+**Completion requires independent evidence.** A fixed read-only verifier
+checks that filled/selected values remain on the actual control. Completion
+rechecks retained values and known user requirements, or verifies an actually
+loaded, reviewed public GET search. Hotels.com also needs the observed selected
+city and displayed date/party summary. Arbitrary clicks or a model's `done`
+claim cannot certify a preparation outcome. Generic widget-only tasks without
+a provable final value/search remain unsupported.
+
+Failures show a bounded recovery category and exact error; model request,
+reader, repair and latency diagnostics remain visible. Request counts are
+logical model calls; schema negotiation can make an additional HTTP request.
+**Retry with my details** prefills an editable draft with your user messages and
+resets sharing consent. Review corrections or conflicting values before starting
+again. Preparation re-inspects the current page with fresh approval scope.
+Already applied changes remain; this is not rollback or automatic replay.
+Research source/price checks do not independently fact-check every narrative
+claim or establish live inventory.
+
+Open **Ask AI → Reliability** for selected-model capability reports:
+
+- Explicitly approve the selected-model evaluation and possible provider charges,
+  then choose **Run selected model checks**. Six built-in synthetic checks cover
+  hotel requirements, genuine missing dates, grounded reader quotes, exact public
+  field proposals, injected sensitive-control refusal and observed-link selection.
+- No browser tools run and no real pages/history/forms/files are shared. These
+  are protocol checks, not live website success-rate certification. Ordinary
+  browsing remains available, but browser tasks and evaluations cannot overlap.
+- **Stop evaluation** cancels the outstanding local request; remote processing
+  or billing may continue. Planned/not-run checks remain in the denominator,
+  rather than making a stopped run look 100% successful.
+- Reports show provider/model, package build/suite version, provenance, each
+  outcome/failure category, passed/planned percentage and median measured latency.
+  Fixture/mock evidence is never labelled a real-model capability rating.
+- Metadata-only reports persist locally under
+  `%LOCALAPPDATA%\AIBrowser\model-evaluations`, with an absolute
+  `AIB_EVALUATION_DIR` development override. Up to 50 runs and 128 KB per report;
+  no raw prompts, page text, responses, endpoint URLs or keys. Storage is checked
+  before paid requests; corruption/write failures are explicit. Files are plain
+  JSON with user-directory permissions (0600 on Unix), not encrypted or signed.
+
+The local runner additionally checks eight actual native fixture task cases:
+natural and structured hotels, a public GET form, priced shopping options,
+quarantine, revocation, wrong results and task-grant permit checks. The mismatch
+case tests both changed query values and a correct URL with wrong displayed
+travelers. The runner uses disposable profiles/settings/audit/evaluation storage.
+
+```powershell
+node .\scripts\test-agent.cjs --eval-only
+node .\scripts\test-agent.cjs --eval-only --repeat 2 --eval-output "$env:TEMP\rovuka-native-evaluation.json"
+```
+
+Repeats accept 1-10. Output paths must be absolute. Import that JSON in
+**Reliability → Native end-to-end regression reports** to retain it alongside
+model checks. Imports are local/unsigned reports, not independent certification;
+the complete planned suite is validated. `--eval-only --live-model` explicitly
+opts into your configured provider and possible charges on synthetic/local
+fixtures; never use it for unattended CI. Evaluation fixtures do not navigate
+live websites.
+
+The Windows [reliability workflow](.github/workflows/reliability.yml) builds the
+UI and standard native executable, checks formatting, runs serial Rust workspace
+tests and repeats the relative-date native fixture evaluations with a mock model.
+It uploads only the metadata JSON, not profiles, settings, screenshots or logs.
+No paid provider or secret is needed. The workflow has been added; remote
+GitHub execution is not claimed until it is published and run. Local full
+regression and optional live-site tests are separate from this CI benchmark.
 
 ### Phase 4 increment: privacy shield and local task audit
 
@@ -626,8 +824,9 @@ abandoned during native teardown.
 
 **Limits:** deterministic masking is defense in depth, not comprehensive secret
 or personal-data detection. It cannot reliably identify every custom token or
-instruction hidden in a webpage. Page data remains untrusted, and no separate
-quarantined LLM reader or critic has been added. Existing cookies, website
+instruction hidden in a webpage. Task research now has a separate no-tools
+quote reader, but page data remains untrusted and a general critic is not
+implemented. Existing cookies, website
 scripts and their network requests still run. Do not share sensitive pages you
 would not otherwise send to your model. Production sandboxing remains pending.
 
@@ -685,11 +884,12 @@ Questions and user replies are sent to the pinned model and kept only in memory.
 During a run, native navigation guards block user-initiated or non-GET main-frame
 navigation, redirects into checkout/account pages, popups and downloads; other
 redirects follow the redirect policy above. Every
-model-proposed navigation needs a fresh, single-use approval; approvals cannot
-be reused after stopping.
+model-proposed navigation needs fresh native authorization, through one-action
+approval or the explicit supported-task grant; approvals cannot be reused after
+stopping.
 
 **Important limits:** This is a reader agent, not a full operator. No clicking,
-typing, uploads, purchases, unapproved autonomous search, screenshot/vision fallback,
+typing in research, uploads, purchases, unapproved autonomous search, screenshot/vision fallback,
 accessibility-tree merge, iframe/shadow-DOM traversal, parallel research or
 full snapshot/replay audit is implemented yet. The durable audit is metadata
 only. Ordinary site scripts, their
@@ -725,7 +925,7 @@ $env:AIB_UI_DEV_URL = "http://localhost:5173"; cargo run
 ## Tests
 
 ```powershell
-cargo test --workspace
+cargo test --workspace -- --test-threads=1
 ```
 
 Native agent integration tests (Windows, Node.js 22+, browser already built):
@@ -776,6 +976,34 @@ The unit suite also checks permit replay, wrong task/tab/URL/mode, expiry,
 approval cancellation and backward-compatible reader audit records. These are
 local mock-model/website fixtures, not a claim that every hotel site is supported.
 
+For focused Hotels.com preparation validation:
+
+```powershell
+node .\scripts\test-agent.cjs --hotel-only
+node .\scripts\test-agent.cjs --hotel-only --live-hotel
+node .\scripts\test-agent.cjs --hotel-only --live-hotel --approve-all-hotel
+```
+
+The 14 local groups cover inline and compact/portal layouts, exact three/four
+approval sequences, zero model questions for the complete request, nine curated
+GET parameters without submission handlers, 320px review in both themes,
+metadata-only audit, preselected cities, form/control replacement, value/region
+drift, permit replay, GET-to-POST changes, missing regions, manual takeover,
+Stop/reload, result-parameter changes, unsupported party requirements and
+unchanged generic behavior on other origins.
+
+`--live-hotel` additionally types bare `hotel.com`, follows the authentic
+redirect, prepares the complete Cancun request through native approvals and
+checks the actual result title, dates and party. It uses disposable storage and
+a local mock model; the supported real-site task must make **zero model calls**.
+Add `--approve-all-hotel` to exercise the natural example and click the real
+native **Approve all for this task** button once, checking fresh permits and
+grant expiry as well as the exact result.
+No booking, payment, sign-in, certificate bypass or challenge solving occurs.
+`AIB_TEST_HOTEL_SCREENSHOT=<absolute image path>` optionally saves the public
+result; `AIB_TEST_HOTEL_DOM=<absolute JSON path>` saves public form metadata
+without field values, cookies or headers.
+
 `--shutdown-only` checks native window/server/CEF shutdown with the same isolated
 fixture storage and no model request.
 
@@ -793,12 +1021,67 @@ The complete local suite also runs these checks with an explicit startup URL.
 Both modes use disposable fixture storage and require a normal zero-exit
 shutdown, not forced termination.
 
-Current Windows verification: **79 workspace Rust tests and all 97 native
-browser checks pass**, preserving all 85 existing groups and adding 12 operator
-groups. Separate nine-check default-start and 10-check Safety runs also pass.
-UI type-check, production UI build, standard native build and graceful shutdown
-checks pass.
-These local fixtures do not certify live model accuracy or macOS readiness.
+For focused ordinary-browsing/error validation:
+
+```powershell
+node .\scripts\test-agent.cjs --navigation-only
+```
+
+Its 13 local groups cover actual omnibox paste before URL commit, exact address
+retention, visible trusted error UI, 320px light/dark controls, Edit/Retry,
+Back/Forward, failed-page Q&A/research/preparation refusal, slow loading, Stop,
+superseded navigation, real HTML 404/429 documents and failed subframes. Four
+additional groups cover a one-time inferred-HTTPS root fallback and genuine
+redirects, explicit/data-bearing HTTPS exclusions, HTTP warning/no-retry loops,
+and cancellation/supersession of fallback candidates. These
+checks require no model calls and are also included in the complete local suite.
+`AIB_TEST_NAVIGATION_SCREENSHOT=<absolute image path>` saves the native error UI.
+
+An explicitly network-enabled, model-free smoke test additionally visits
+example.com, hotel.com and www.hotels.com:
+
+```powershell
+node .\scripts\test-agent.cjs --navigation-only --live-browsing
+```
+
+It checks that example.com displays its real document and that hotel destinations
+show either actual website content or a visible native failure, retaining the
+address. It does not solve site challenges, change settings or certify booking
+support. All browsers use disposable profiles and close normally.
+
+Current Windows verification: **102 workspace Rust tests and all 137 native
+regression groups pass**, preserving all 136 preceding groups and adding trusted
+approve-all/preselected-form recovery coverage. Page click/keyboard/scroll
+takeover reasons, grant expiry and consent-reset stopped-task retry are checked
+in the native UI. The suite retains the eight reliability task cases, three
+evaluation/API/UI groups and repeated-question protection. A separate Phase 5
+two-repeat evaluation passes **16/16 native task
+cases and all six mock model-protocol checks**, including wrong-query and
+wrong-displayed-result failures, Stop and both 320px themes. UI type-check,
+production UI build, standard native build, formatting and normal zero-exit
+CEF/server shutdown pass.
+
+The actual native live-hotel test followed bare `hotel.com` to secure Hotels.com
+and completed the natural Cancun request with **one human task-wide approval,
+four fresh audited actions, zero questions, zero model calls and no manual
+widget steps**. Its independently checked visible results showed Cancun,
+November 20-25, 2026, and 2 travelers in 1 room; all nine required query values
+also matched. Hotels.com may show its ordinary taxes/fees notice over the
+prepared results; dismiss it yourself to review offers. Notices, challenges and
+sign-in are not silently acknowledged or bypassed.
+
+A further live preselected-Cancun run held its approval for nine seconds before
+a trusted task-wide pointer click. It completed one GET action, independently
+verified the new November 21-26 dates and exact party/query values, and made zero
+model requests. A fixture separately replaces a preselected form while paused:
+the old permit is rejected with a fixed reason code and a fresh audited permit
+is required to continue under the task grant.
+
+The earlier separate model-free live-browsing smoke displayed example.com and
+the Hotels.com homepage; **explicit** `https://hotel.com/` retained its honest
+connection-refused error without a downgrade. These fixtures do not certify
+live model accuracy or macOS readiness; the new GitHub workflow has not yet
+been run remotely.
 
 It also checks comparison-format correction, observed direct destinations,
 invented-link rejection, scoped grants/revocation/expiry, page bounds, native

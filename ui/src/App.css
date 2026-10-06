@@ -238,6 +238,20 @@ button:disabled {
   background: var(--cp-surface);
 }
 
+.connection-state {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--cp-text-muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.omnibox:has(.connection-state) input {
+  padding-left: 88px;
+}
+
 .progress {
   position: absolute;
   left: 12px;
