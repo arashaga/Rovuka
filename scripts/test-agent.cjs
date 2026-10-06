@@ -69,8 +69,9 @@ async function connectCdp(url) {
 }
 
 async function main() {
+  const liveMultitab = process.argv.includes('--live-multitab');
   const liveWeb = process.argv.includes('--live-web');
-  const liveModel = process.argv.includes('--live-model') || liveWeb;
+  const liveModel = process.argv.includes('--live-model') || liveWeb || liveMultitab;
   const evalOnly = process.argv.includes('--eval-only');
   const evalOutputIndex = process.argv.indexOf('--eval-output');
   const evalOutput = evalOutputIndex >= 0 ? process.argv[evalOutputIndex + 1] : null;
@@ -87,7 +88,7 @@ async function main() {
   const navigationOnly = process.argv.includes('--navigation-only');
   const liveBrowsing = process.argv.includes('--live-browsing');
   const hotelOnly = process.argv.includes('--hotel-only');
-  const multitabOnly = process.argv.includes('--multitab-only');
+  const multitabOnly = process.argv.includes('--multitab-only') || liveMultitab;
   const liveHotel = process.argv.includes('--live-hotel');
   const approveAllHotel = process.argv.includes('--approve-all-hotel');
   const fixtureParty = liveModel && process.argv.includes('--family')
@@ -108,8 +109,8 @@ async function main() {
     'Hotel shortcut checks must use their own focused mode with a local mock model');
   assert(!liveHotel || hotelOnly, 'Live hotel smoke requires --hotel-only; it uses native reviewed public GET actions, not a cloud model');
   assert(!approveAllHotel || liveHotel, '--approve-all-hotel requires --hotel-only --live-hotel');
-  assert(!multitabOnly || (!liveModel && captureArgument < 0 && !evalOnly && !safetyOnly && !shutdownOnly && !startPageOnly && !operatorOnly && !navigationOnly && !hotelOnly),
-    'Multi-tab checks must use their own focused mode and loopback-only mock models');
+  assert(!multitabOnly || ((!liveModel || liveMultitab) && !liveWeb && captureArgument < 0 && !evalOnly && !safetyOnly && !shutdownOnly && !startPageOnly && !operatorOnly && !navigationOnly && !hotelOnly),
+    'Multi-tab checks require their own mode; live websites/model calls require explicit --live-multitab');
   const privacyToken = ['sk', 'simulatedfixture'.repeat(3)].join('-');
   const privacyCard = ['4111', '1111', '1111', '1111'].join(' ');
   const privateValues = [privacyToken, privacyCard, 'fixturePagePassword', 'fixtureTitlePassword',
@@ -284,8 +285,9 @@ async function main() {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
           res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: decision } }] })}\n\ndata: [DONE]\n\n`);
         };
-        if (input?.role === 'quarantinedReader') {
+        if (input?.role === 'quarantinedReader' || input?.role === 'quarantinedReaderRecovery') {
           readerCalls++;
+          const recovering = input.role === 'quarantinedReaderRecovery';
           assert(system.includes('NO browser tools') && system.includes('UNTRUSTED DATA'), 'Reader must have no tools or authority');
           if (plainFallback && request.response_format) {
             schemaRejections++;
@@ -293,9 +295,10 @@ async function main() {
             res.end(JSON.stringify({ error: { message: "Invalid parameter: 'response_format' of type 'json_schema' is not supported with this model." } }));
             return;
           }
-          if (request.response_format) assert.equal(request.response_format.json_schema.name, 'page_evidence');
+          if (request.response_format) assert.equal(request.response_format.json_schema.name, recovering ? 'page_evidence_selection' : 'page_evidence');
           for (const value of privateValues) assert(!prompt.includes(value), 'A private value reached the quarantined reader');
-          const quotes = input.untrustedPage.text.split(/\n|(?<=[.!?])\s+/)
+          const text = recovering ? input.untrustedPage.excerpts.map(excerpt => excerpt.text).join('\n') : input.untrustedPage.text;
+          const quotes = text.split(/\n|(?<=[.!?])\s+/)
             .map(value => value.trim()).filter(value => value && !value.includes('[redacted]') && !/ignore (?:previous|prior|all) instructions|system prompt|system message|developer message|reveal your|send (?:the|your) password|override permissions|approve all actions|attacker-value|<script|javascript:/i.test(value))
             .slice(0, 24).map(value => value.slice(0, 700));
           if (input.untrustedPage.title === 'Hotel evidence') await delay(200);
@@ -308,11 +311,38 @@ async function main() {
             comparisonReaderPeak = Math.max(comparisonReaderPeak, comparisonReaderActive);
             try { await delay(comparisonReaderDelay); } finally { comparisonReaderActive--; }
             if (input.goal.includes('invalid evidence reader')) {
-              respond(JSON.stringify({ quotes: ['A fabricated quote absent from every source.'] }));
+              respond(JSON.stringify(recovering ? { quoteIds: [999] } : { quotes: ['A fabricated quote absent from every source.'] }));
+              return;
+            }
+            if (input.goal.includes('recover evidence reader') && input.untrustedPage.title === 'Comparison Alpha' && !recovering) {
+              respond(JSON.stringify({ quotes: ['The total costs USD 240, a paraphrase not present on the page.'] }));
+              return;
+            }
+            if (input.goal.includes('empty evidence reader') && input.untrustedPage.title === 'Comparison Alpha' && !recovering) {
+              respond(JSON.stringify({ quotes: [] }));
               return;
             }
           }
-          respond(JSON.stringify({ quotes }));
+          if (recovering) {
+            const excerpts = input.untrustedPage.excerpts;
+            assert(excerpts.length > 0 && excerpts.length <= 128);
+            assert(excerpts.every((excerpt, index) => excerpt.id === index + 1 && [...excerpt.text].length <= 700
+              && !excerpt.text.includes('[redacted]') && !/ignore previous instructions|override permissions/i.test(excerpt.text)),
+            'Recovery must offer only bounded, native, non-sensitive excerpts');
+            if (input.goal.includes('failed reader recovery')) {
+              await delay(1500);
+              res.writeHead(503, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: { message: 'The evidence selector is unavailable.' } }));
+              return;
+            }
+            if (input.goal.includes('empty reader recovery')) {
+              respond(JSON.stringify({ quoteIds: [] }));
+              return;
+            }
+            respond(JSON.stringify({ quoteIds: excerpts.slice(0, 24).map(excerpt => excerpt.id) }));
+          } else {
+            respond(JSON.stringify({ quotes }));
+          }
           return;
         }
         modelCalls++;
@@ -330,7 +360,7 @@ async function main() {
           }
           assert(system.includes('NO browser tools') && system.includes('untrusted data'));
           for (const sentinel of ['UNSELECTED_PRIVATE_MARKER', 'COMPARISON_PRIVATE_INPUT', 'COMPARISON_PRIVATE_PASSWORD',
-            'Ignore previous instructions', 'override permissions']) assert(!prompt.includes(sentinel),
+            'Ignore previous instructions', 'override permissions', 'a paraphrase not present on the page']) assert(!prompt.includes(sentinel),
             'Comparison synthesis must receive only selected-source, checked factual evidence');
           if (input.userGoal.includes('failed synthesis comparison')) {
             await delay(1500);
@@ -342,7 +372,7 @@ async function main() {
           const rows = input.sources.map(source => {
             const quotes = source.quotesEvidence.split('\n');
             return { sourceId: source.sourceId, quotes: [
-              quotes.find(quote => quote.startsWith('Total USD ')) || null,
+              quotes.find(quote => quote.includes('Total USD ')) || null,
               quotes.find(quote => quote.startsWith('Parking:')) || null,
               quotes.find(quote => quote.startsWith('Cancellation:')) || null,
             ] };
@@ -1151,6 +1181,60 @@ async function main() {
         comparisonReaderPeak = 0;
       };
       try {
+        if (liveMultitab) {
+          const goal = 'Compare these pages on typing style, memory management and intended uses. Quote each page. Leave unsupported details Unknown. Do not browse or perform actions.';
+          const urls = [
+            'https://en.wikipedia.org/wiki/Rust_(programming_language)',
+            'https://en.wikipedia.org/wiki/Python_(programming_language)',
+          ];
+          const ids = [];
+          for (const url of urls) ids.push(await open(url));
+          const perception = await fs.readFile(path.join(root, 'crates', 'aib-app', 'src', 'perception.js'), 'utf8');
+          const pages = [];
+          for (const id of ids) {
+            const page = await evaluate(await content(id), perception);
+            assert(page.text.length > 2000 && page.title.endsWith(' - Wikipedia'), 'The live page must contain a readable article, not a challenge');
+            pages.push(page);
+          }
+          const before = await tabSnapshot();
+          await send({ type: 'openAssistant', panel: 'task', goal });
+          const target = await waitFor(async () => {
+            const targets = await (await fetch(`http://127.0.0.1:${nativePort}/json/list`)).json();
+            return targets.find(target => target.url.startsWith(base) && target.url.includes('surface=assistant'));
+          }, 'live comparison assistant');
+          assistant = await connectCdp(target.webSocketDebuggerUrl);
+          await begin(ids, goal);
+          await pending();
+          await trustedClick(assistant, '.approval-allow-all:not(:disabled)');
+          const view = await waitFor(async () => {
+            const task = await rpc('/api/agent');
+            return task && ['completed', 'failed', 'stopped', 'noEvidence'].includes(task.status) && task;
+          }, 'live comparison outcome', 300000);
+          console.log(`Live comparison: status=${view.status}; pages=${view.pagesRead}; requests=${view.modelUsage.requests}; repairs=${view.modelUsage.repairs}; readerRequests=${view.modelUsage.readerRequests}`);
+          assert.equal(view.status, 'completed', view.error || view.message);
+          assert.equal(view.pagesRead, 2);
+          assert.equal(view.comparison.rows.length, 2);
+          assert.equal(view.comparison.columns.length, 3, 'The comparison must cover the three requested criteria');
+          const normalized = value => value.split(/\s+/).filter(Boolean).join(' ');
+          for (const row of view.comparison.rows) {
+            assert(row.quotes.some(quote => quote !== null), 'Each readable article must contribute factual evidence');
+            for (const quote of row.quotes.filter(quote => quote !== null)) {
+              assert(normalized(pages[row.sourceId - 1].text).includes(normalized(quote)), 'Every live quote must belong to its exact source');
+            }
+          }
+          const after = await tabSnapshot();
+          assert.equal(after.tabs.length, before.tabs.length);
+          assert.equal(after.active, before.active);
+          for (const tab of before.tabs) assert.equal(after.tabs.find(item => item.id === tab.id)?.url, tab.url);
+          await waitFor(() => evaluate(assistant, 'document.querySelectorAll(".comparison-table tbody tr").length===2'), 'live comparison rendered');
+          if (process.env.AIB_LIVE_SCREENSHOT) {
+            const screenshot = await assistant.command('Page.captureScreenshot', { format: 'png' });
+            await fs.writeFile(process.env.AIB_LIVE_SCREENSHOT, Buffer.from(screenshot.data, 'base64'));
+          }
+          await openResultTab(assistant, 'document.querySelector(".comparison-source").click()', urls[0]);
+          console.log('PASS: the selected live model compares the original Rust/Python Wikipedia task with two source-bound rows, three criteria and preserved original tabs; source links open new tabs');
+          return;
+        }
         const ids = [];
         for (const name of ['a', 'b', 'c', 'd']) ids.push(await open(`${fixtureBase}/compare/${name}`));
         const unselected = await open(`${fixtureBase}/compare/unselected`);
@@ -1383,6 +1467,59 @@ async function main() {
         console.log('PASS: fabricated values, wrong-source citations and invalid reader evidence never publish; comparison repair is bounded to one attempt and successful repair keeps exact source quotes');
 
         await fresh();
+        const readersBeforeRecovery = readerCalls;
+        await begin(ids.slice(0, 2), 'recover evidence reader: total price, parking and cancellation');
+        await approveAll(await pending());
+        view = await terminal();
+        assert.equal(view.status, 'completed', view.error);
+        assert.equal(view.comparison.rows.length, 2);
+        assert(view.comparison.rows[0].quotes[0].includes('Total USD 240.'));
+        assert.equal(view.modelUsage.requests, 4);
+        assert.equal(view.modelUsage.readerRequests, 3);
+        assert.equal(view.modelUsage.repairs, 1);
+        assert.equal(readerCalls - readersBeforeRecovery, 3);
+        assert(view.steps.some(step => step.includes('one native-excerpt selection')));
+        assert.equal(comparisonReaderInputs.filter(input => input.role === 'quarantinedReaderRecovery').length, 1);
+        console.log('PASS: a rejected non-verbatim reader quote recovers once through native excerpt IDs; exact source checks, privacy and two-reader concurrency remain intact and request/repair counts are explicit');
+
+        for (const goal of [
+          'recover evidence reader; failed reader recovery',
+          'recover evidence reader; empty reader recovery',
+          'empty evidence reader',
+        ]) {
+          await fresh();
+          const actorsBefore = comparisonCalls;
+          await begin(ids.slice(0, 2), goal);
+          await approveAll(await pending());
+          view = await terminal();
+          assert.equal(view.status, 'failed');
+          assert.equal(view.comparison, null);
+          assert.equal(view.answer, null);
+          assert.equal(comparisonCalls, actorsBefore, 'No rejected evidence may reach synthesis');
+          assert.equal(view.modelUsage.repairs, goal === 'empty evidence reader' ? 0 : 1);
+          assert.equal(view.modelUsage.readerRequests, goal === 'empty evidence reader' ? 2 : 3);
+          if (goal.includes('failed reader recovery')) assert(view.modelUsage.elapsedMs >= 1400);
+        }
+        console.log('PASS: evidence recovery provider failure or an empty selection fails explicitly without synthesis or fabricated results; a valid empty initial reader response is an evidence gap, not a retry');
+
+        await fresh();
+        comparisonReaderDelay = 1000;
+        await begin(ids.slice(0, 2), 'recover evidence reader: stop during native-excerpt selection');
+        await approveAll(await pending());
+        await waitFor(() => comparisonReaderInputs.some(input => input.role === 'quarantinedReaderRecovery'), 'native-excerpt recovery in flight');
+        const actorsAtStop = comparisonCalls;
+        view = await rpc('/api/agent');
+        await rpc('/api/agent/stop', { taskId: view.id });
+        await delay(1200);
+        view = await rpc('/api/agent');
+        assert.equal(view.status, 'stopped');
+        assert.equal(view.comparison, null);
+        assert.equal(view.answer, null);
+        assert.equal(comparisonCalls, actorsAtStop, 'Late recovery must not start synthesis');
+        comparisonReaderDelay = 300;
+        console.log('PASS: Stop during corrective excerpt selection retires task authority and a late reader response cannot publish or start comparison synthesis');
+
+        await fresh();
         const failedActorBefore = comparisonCalls;
         await begin(ids.slice(0, 2), 'failed synthesis comparison: total price, parking and cancellation');
         await approveAll(await pending());
@@ -1442,9 +1579,16 @@ async function main() {
         if (task && ['running', 'awaitingApproval', 'needsInput'].includes(task.status)) await rpc('/api/agent/stop', { taskId: task.id });
         assistant?.close();
         for (const connection of connections.values()) connection.close();
-        const remaining = await tabSnapshot();
-        for (const tab of remaining.tabs.filter(tab => !existingIds.has(tab.id))) await send({ type: 'closeTab', tabId: tab.id });
-        if (remaining.tabs.some(tab => tab.id === initial.active)) await send({ type: 'activateTab', tabId: initial.active });
+        if (!liveMultitab) {
+          const remaining = await tabSnapshot();
+          for (const tab of remaining.tabs.filter(tab => !existingIds.has(tab.id))) await send({ type: 'closeTab', tabId: tab.id });
+          await waitFor(async () => {
+            const snapshot = await tabSnapshot();
+            return snapshot && snapshot.tabs.length === initial.tabs.length
+              && snapshot.tabs.every(tab => existingIds.has(tab.id));
+          }, 'comparison-owned tabs finish closing before reusing the fixture browser');
+          if (remaining.tabs.some(tab => tab.id === initial.active)) await send({ type: 'activateTab', tabId: initial.active });
+        }
         comparisonReaderDelay = 300;
       }
     };

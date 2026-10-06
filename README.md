@@ -260,7 +260,12 @@ not raw page prose, unrelated tabs or their content. Every cell must be an exact
 normalized quote found in both its protected source snapshot and checked
 evidence, or **Unknown**. Missing details are not estimated, calculated, treated
 as free or silently filled from another source. A malformed comparison gets at
-most one correction; reader failure prevents partial publication. An all-Unknown
+most one correction. If a reader's nonempty output is rejected, it gets one
+bounded recovery: select IDs from at most 128 native-captured safe excerpts,
+instead of copying their text again. Native code resolves those IDs and reruns
+the same exact source checks; invalid IDs, sensitive/instruction-like excerpts
+and failed recovery still prevent partial publication. A valid empty reader
+result is an explicit evidence gap, not a retry. An all-Unknown
 table is **No verified result**, with the unknowns still available to inspect.
 
 The full-width research workspace keeps your question, comparison table,
@@ -276,8 +281,9 @@ remain model judgments; search snippets remain leads, not provider-confirmed
 facts. Dates, prices, fees and availability may change. Snapshots must stay on
 the same document through publication; this does not freeze live in-page data
 or independently verify offers. The displayed timestamp is the snapshot-run
-start. Each page needs an additional model reader request; endpoint fallback
-may require extra HTTP attempts. Model time sums settled request durations,
+start. Each page needs a model reader request and at most one additional reader
+recovery request. Recovery is visible in Activity and request/repair counts;
+endpoint fallback may require extra HTTP attempts. Model time sums settled request durations,
 including provider errors, not parallel wall-clock completion time. Cancelled
 unfinished requests may have no recorded duration. Results are session-only,
 not browser memory.
@@ -1063,6 +1069,19 @@ all-Unknown evidence gaps and the new research tab's lease cleanup. The full
 suite includes these groups. Windows CI runs this focused suite after the
 repeated native evaluations; only metadata evaluation JSON is uploaded.
 
+An explicitly opted-in live check uses your configured model and public
+Rust/Python Wikipedia articles with the exact manual-test prompt above:
+
+```powershell
+node .\scripts\test-agent.cjs --live-multitab
+```
+
+This can incur provider charges. It uses a disposable browser profile, verifies
+two source-bound rows and three criteria, unchanged original tabs and source
+links in new tabs, then closes its own browser. `AIB_LIVE_SCREENSHOT=<absolute
+image path>` optionally saves the comparison locally. It is never part of CI
+or the default mock suite, and it does not certify arbitrary pages or models.
+
 The full suite includes 12 operator groups: opt-in draft handoff, exact reviews,
 native dates/filters/scroll/GET parameters, retained findings, injected or
 transactional proposal rejection, stale nodes/values/documents, trusted manual
@@ -1151,12 +1170,16 @@ show either actual website content or a visible native failure, retaining the
 address. It does not solve site challenges, change settings or certify booking
 support. All browsers use disposable profiles and close normally.
 
-Current Windows verification: **111 workspace Rust tests and all 150 native
-regression groups pass**, preserving all 137 preceding groups and adding 13
-scoped multi-tab, comparison and preserved-research groups. These cover trusted
+Current Windows verification: **116 workspace Rust tests and all 153 native
+regression groups pass**, preserving all 150 preceding groups and adding three
+reader-recovery groups. The 16 scoped multi-tab, comparison and preserved-research
+groups cover trusted
 selection/approval, exact two-reader concurrency, unselected/form privacy,
 source-checked/Unknown cells, reload/close, revoke/Stop, failed synthesis latency,
 bounded correction, copy denial, retained findings and one-tab lease cleanup.
+Rejected copied quotes recover through native excerpt IDs without fuzzy quote
+acceptance. Provider/empty-selection failures and Stop during recovery remain
+explicit; the additional reader requests and corrections are counted.
 Existing ordinary navigation, hotel preparation, task-wide approval, manual
 takeover, narrow themes, privacy/audit and shutdown checks remain passing.
 A separate two-repeat evaluation passes **16/16 native task cases and all six
@@ -1164,6 +1187,12 @@ mock model-protocol checks**, including wrong-query and wrong-displayed-result
 failures, Stop and both 320px themes. UI type-check, production UI build, standard
 native build, formatting and editor diagnostics also pass. Fixture UI transitions
 and live-activity checks use explicit synchronization, not fixed delay guesses.
+The original Rust/Python Wikipedia request also completed with the configured
+live model, including an actual rejected-quote recovery, two source-bound rows,
+three criteria and preserved originals/new-tab source links. One initial full
+run hit the existing conversation-expansion focus timeout; its unchanged rerun
+passed all 153 groups. Live model results can vary; this is not a guarantee of
+all future outputs.
 
 The actual native live-hotel test followed bare `hotel.com` to secure Hotels.com
 and completed the natural Cancun request with **one human task-wide approval,

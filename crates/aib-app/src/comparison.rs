@@ -468,7 +468,8 @@ pub async fn run(
             task.view.model_usage.requests += 1;
             task.view.model_usage.reader_requests += 1;
         });
-        let result = crate::evidence::read(&page, goal, settings, key).await;
+        let result = crate::evidence::read(&page, goal, settings, key,
+            || service.reader_recovery(id, index + 1)).await;
         service.update(id, |task| task.view.model_usage.elapsed_ms += started.elapsed().as_millis() as u64);
         let (safe, reply) = result.with_context(|| format!("Evidence reader for selected source {} failed; no comparison was published", index + 1))?;
         service.update(id, |task| {

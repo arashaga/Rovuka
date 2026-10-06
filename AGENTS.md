@@ -68,6 +68,12 @@ returns exact source-checked quotes, never tool instructions. Original protected
 observations remain the authority for existing price/source checks; projected
 evidence alone must not replace that grounding. Do not claim injection immunity
 or independently verified narrative facts.
+Rejected reader output may use one native-excerpt-ID recovery. Generate only
+bounded, source-native, nonmasked/non-instruction-like candidates; resolve IDs
+natively and rerun unchanged exact projection checks. Never accept a paraphrase
+with fuzzy matching or send rejected quotes to the acting agent. Valid empty
+evidence and initial provider failures are not retries. Count recovery requests,
+repairs and settled latency; Stop/audit failure must prevent further work.
 
 Evaluation changes must pass `--eval-only --repeat 2` and the full native suite.
 Keep model-protocol and native-end-to-end scopes, fixed case IDs, suite version,
@@ -112,6 +118,9 @@ all-Unknowns, retained comparison and 320px light/dark layout. GUI suites must
 run sequentially. Restore and test the compact 1008x605 viewport after narrow
 layout emulation, including trusted sharing consent. CI remains local/mock-only
 with no private artifacts.
+`--live-multitab` is a separate opt-in selected-model/public-Wikipedia smoke
+check with possible provider costs, disposable storage and owned-browser
+cleanup. Never include it in default or CI fixtures.
 
 Privacy/audit changes must pass `node .\scripts\test-agent.cjs --safety-only`
 after rebuilding. Native fixtures isolate `AIB_AUDIT_DIR` from the real history.

@@ -487,6 +487,7 @@ async fn run_check(
             "Find the factual hotel price and breakfast terms",
             settings,
             key,
+            || Ok(()),
         )
         .await?;
         if !page.text.contains("USD 42") || !page.text.contains("Breakfast") {

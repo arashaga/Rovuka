@@ -1547,6 +1547,24 @@ impl Service {
         self.update(id, |task| task.view.steps.push(label.into()));
     }
 
+    fn reader_recovery(&self, id: &str, source_id: usize) -> anyhow::Result<()> {
+        if !self.task_active(id) {
+            bail!("The task stopped before evidence recovery");
+        }
+        self.update(id, |task| {
+            task.view.model_usage.requests += 1;
+            task.view.model_usage.reader_requests += 1;
+            task.view.model_usage.repairs += 1;
+            task.view.steps.push(format!(
+                "Evidence reader for source {source_id} returned rejected output. Trying one native-excerpt selection instead of copying quotes; source checks are unchanged."
+            ));
+        });
+        if !self.task_active(id) {
+            bail!("Evidence recovery was stopped or could not be audited");
+        }
+        Ok(())
+    }
+
     /// Asks for approval unless the task's research grant covers this kind of navigation.
     async fn authorize_navigation(
         &self,
@@ -1738,7 +1756,10 @@ impl Service {
                     task.view.model_usage.requests += 1;
                     task.view.model_usage.reader_requests += 1;
                 });
-                let result = crate::evidence::read(&observation, goal, settings, key).await;
+                let result = crate::evidence::read(&observation, goal, settings, key, || {
+                    self.reader_recovery(id, sources.len())
+                })
+                .await;
                 self.update(id, |task| {
                     task.view.model_usage.elapsed_ms += reader_started.elapsed().as_millis() as u64
                 });
