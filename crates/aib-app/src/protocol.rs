@@ -19,6 +19,8 @@ pub struct WireDecision {
     #[serde(default)]
     link_id: Option<u32>,
     #[serde(default)]
+    source_id: Option<usize>,
+    #[serde(default)]
     reason: Option<String>,
     #[serde(default)]
     message: Option<String>,
@@ -72,6 +74,7 @@ impl WireDecision {
             },
             Action::FollowLink => Decision::FollowLink {
                 link_id: self.link_id.context("followLink requires linkId")?,
+                source_id: self.source_id,
                 reason: reason(),
             },
             Action::NeedsInput => Decision::NeedsInput {
@@ -412,9 +415,13 @@ pub fn decision_schema() -> Value {
     let destination = object(json!({
         "sourceId": integer(), "linkId": { "type": ["integer", "null"] }, "label": string()
     }));
+    let evidence = object(json!({
+        "sourceId": integer(), "quote": nullable(string()), "quoteId": nullable(integer())
+    }));
     let option = object(json!({
         "name": string(), "fit": string(), "details": string(), "tradeoffs": string(),
         "sources": ids(), "offer": nullable(offer),
+        "evidence": { "type": "array", "items": evidence },
         "destinations": { "type": "array", "items": destination }
     }));
     let finding = object(json!({ "title": string(), "detail": string(), "sources": ids() }));
@@ -442,6 +449,7 @@ pub fn decision_schema() -> Value {
         "flight": nullable(flight),
         "stay": nullable(stay),
         "linkId": { "type": ["integer", "null"] },
+        "sourceId": { "type": ["integer", "null"] },
         "reason": { "type": ["string", "null"] },
         "message": { "type": ["string", "null"] },
         "answer": { "type": ["string", "null"] },

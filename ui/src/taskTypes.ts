@@ -57,6 +57,7 @@ export interface ResearchReport {
       }[]
     } | null
     links: { label: string; url: string; sourceId: number; visited: boolean; kind: 'search' | 'page' | 'link' }[]
+    evidence?: { sourceId: number; quote: string }[]
   }[]
   findings: { title: string; detail: string; sources: number[] }[]
   gaps: string[]

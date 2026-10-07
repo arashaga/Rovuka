@@ -75,6 +75,62 @@ with fuzzy matching or send rejected quotes to the acting agent. Valid empty
 evidence and initial provider failures are not retries. Count recovery requests,
 repairs and settled latency; Stop/audit failure must prevent further work.
 
+Research shortlists use `research.rs`, not a brand/site recommendation router.
+Keep discovery, candidate verification and synthesis separate: native bounded
+progress lists only safe observed unvisited links, and `followLink.sourceId`
+scopes a link to an earlier task observation (null preserves latest-page
+behavior). Guide actionable comparisons to reserve reads for distinct candidates
+before additional catalogues or single-choice price-shopping; this is model
+planning guidance, not a new native budget or a mandatory fake shortlist.
+Actor navigation uses checked projections; original protected
+snapshots still ground prices and exact option quotes. Only successfully
+settled native navigation may map an observed redirect wrapper to its landing
+page. Earlier links still need the current task's lease, policy and approval.
+Nonempty actionable options require directly read named-choice evidence and
+specific observed destinations; shared generic catalogues are not shortlists.
+Retain bounded checked named-choice quotations from declared direct sources
+alongside model-selected quotes. Do not replace forged quotes or invent support
+for missing criteria; provenance is not an independent semantic certification.
+Prefer native source-assigned quote IDs over model-retyped text. Resolve only
+the selected source's bounded checked catalogue; reject mixed text/IDs, unknown
+IDs, source mismatch and UTF-8 byte overflow. IDs must be removed before native
+report validation, UI output and archival; unresolved references cannot be stored.
+Keep legacy exact text quotes compatible, without fuzzy acceptance.
+Named-choice identity may use a leading exact native hostname namespace plus an
+observed exact name. Never strip arbitrary brands or invented variant suffixes.
+Preserve the reviewed travel-result-page exception and native price sorting.
+Do not accept shared catalogue targets just because product headings occur on
+the listing. Promote a specific destination over unrelated navigation links.
+Budget exhaustion still permits report-only corrections using existing native
+source IDs and null link IDs; never instruct the model to discard already-read
+candidate evidence. Starting/from prices are not exact variant totals; check
+the protected source context even when the proposed quote strips the qualifier.
+Repair unrelated destination links from unique, checked, declared candidate
+sources without another model round; record the native correction in Activity.
+Count other options' matching candidate sources as shared targets before repair,
+so a multi-name catalogue cannot become several specific destinations.
+Only explicit cross-site-hop exhaustion may recover, at most twice within the
+existing task iteration bound and after native document readiness is rechecked.
+Exclude every attempted/paused target in the failed route from further tools;
+do not create factual sources or settled aliases for it. Keep the failure visible
+in Activity/model progress. Other guard/readiness/lease errors still fail closed.
+At most two native completion-review rounds provide explicit evidence gaps
+without expanding page/question/time budgets or temporarily publishing weak
+cards. Limited sourced briefs may have no options; never fabricate alternatives.
+Valid-empty research readers expose navigation-only projections, not raw prose
+or factual source authority, and still consume a page. Keep strict comparison
+empty-reader behavior unchanged. Per-option exact quotes are bounded, remain
+untrusted and survive historical archives; source checks do not certify fit,
+live stock or semantic truth. Inferred legacy quotes must preserve byte bounds.
+Supplied option quotes need the same native provenance checks in brief mode;
+legacy briefs without that field must retain their original compatibility.
+Run `--research-only`, `--eval-only --repeat 2` and the full native suite after
+rebuilding. `--live-web --live-research` is a separate explicit cost/network opt-in;
+verify meaningful distinct read destinations, exact capability quotes and
+prices or explicit gaps, not only completed status. Custom live goals must not
+receive an automatic unrelated travel reply. Keep live JSON/logs/screenshots
+private and never enable that mode in CI. GUI suites run sequentially.
+
 Evaluation changes must pass `--eval-only --repeat 2` and the full native suite.
 Keep model-protocol and native-end-to-end scopes, fixed case IDs, suite version,
 complete planned denominators and fixture/mock versus selected-model provenance

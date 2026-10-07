@@ -67,6 +67,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --check .\scripts\test-redesign.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check .\scripts\test-research.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Serial Rust workspace tests
         run: cargo test --locked --workspace -- --test-threads=1
       - name: Build the standard native browser
@@ -83,6 +85,10 @@ jobs:
       - name: Scoped multi-tab native regressions
         run: |
           node .\scripts\test-agent.cjs --multitab-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Evidence-driven research native regressions
+        run: |
+          node .\scripts\test-agent.cjs --research-only
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Local memory, restart and tab native regressions
         run: |

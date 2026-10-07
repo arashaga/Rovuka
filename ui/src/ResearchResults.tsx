@@ -56,6 +56,7 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
   const complete = task.status === 'completed'
   const recommendation = report?.recommendedOption === null ? undefined : report?.recommendedOption
   const priceGroups = new Set(report?.options.flatMap(option => option.offer ? [priceGroup(option.offer)] : []))
+  const priceRelevant = report?.intent === 'shopping' || report?.intent === 'travel' || priceGroups.size > 0
   const hasOptions = complete && !!report?.options.length
   const openSource = (id: number) => {
     const source = task.sources.find(source => source.id === id)
@@ -119,7 +120,8 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
         <div className="findings-section-heading"><h2>{report.intent === 'travel' ? 'Your travel options' : report.intent === 'shopping' ? 'Your buying options' : 'Your shortlist'}</h2>
           <p>{priceGroups.size === 1 ? 'Lowest observed subtotal first · Unpriced options last'
             : priceGroups.size > 1 ? 'Grouped by currency, cost basis & scope · Lowest subtotal within each group'
-              : 'Prices unavailable · Ordered by fit, not by price'}</p></div>
+              : priceRelevant ? 'Prices unavailable · Ordered by fit, not by price'
+                : 'Ordered by fit · Review the supporting evidence'}</p></div>
         <div className="findings-options">{report.options.map((option, index) => {
           const offer = option.offer
           return <article key={index}
@@ -128,7 +130,7 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
             <div className="option-identity"><span className="finding-badge">Option {index + 1}{recommendation === index ? ' · Best fit' : ''}</span>
               <h3>{option.name}</h3>{!offer && <p className="finding-fit">{option.fit}</p>}</div>
             <div className="option-price">
-              <strong>{offer ? money(offer.totalMinor, offer.currency) : 'Price unavailable'}</strong>
+              <strong>{offer ? money(offer.totalMinor, offer.currency) : priceRelevant ? 'Price unavailable' : 'Fit comparison'}</strong>
               <small>{offer ? `${offer.currency} · ${bases[offer.basis]}` : 'Not price-ranked'}</small>
             </div>
           </div>
@@ -153,6 +155,11 @@ export default function ResearchResults({ task, onBack, onNew, onRetry }: {
             <p>{option.fit}</p>
             <p>{option.details}</p>
             <p><strong>Limitations: </strong>{option.tradeoffs}</p>
+            {!!option.evidence?.length && <div className="option-evidence-quotes" aria-label="Source-checked option evidence">
+              {option.evidence.map((quote, quoteIndex) => <p key={quoteIndex}>
+                <strong>Observed on source [{quote.sourceId}]: </strong>{quote.quote}
+              </p>)}
+            </div>}
             {option.links.filter(link => link.kind !== 'search').map((link, index) =>
               <div key={index}><button className="assistant-secondary option-prepare"
                 title="Open a new tab and prepare an editable task; does not start or grant permission"

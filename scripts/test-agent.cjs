@@ -92,6 +92,9 @@ async function main() {
   const memoryOnly = process.argv.includes('--memory-only');
   const tabsOnly = process.argv.includes('--tabs-only');
   const redesignOnly = process.argv.includes('--redesign-only');
+  const researchOnly = process.argv.includes('--research-only');
+  const liveResearch = process.argv.includes('--live-research');
+  assert(!liveResearch || liveWeb, '--live-research requires the explicit --live-web provider/public-site opt-in');
   assert(!redesignOnly || !liveModel, '--redesign-only uses loopback fixtures and a mock model only');
   const liveHotel = process.argv.includes('--live-hotel');
   const approveAllHotel = process.argv.includes('--approve-all-hotel');
@@ -100,6 +103,9 @@ async function main() {
     : 'two adults, one hotel room for five nights';
   const root = path.resolve(__dirname, '..');
   const captureArgument = process.argv.indexOf('--replay-option-sources');
+  assert(!researchOnly || (!liveModel && captureArgument < 0 && !evalOnly && !safetyOnly && !shutdownOnly
+    && !startPageOnly && !operatorOnly && !navigationOnly && !hotelOnly && !multitabOnly && !memoryOnly && !tabsOnly && !redesignOnly),
+  'Research quality checks require their own local/mock-only mode');
   assert(!safetyOnly || (!liveModel && captureArgument < 0), 'Safety checks must use only local fixtures');
   assert(!shutdownOnly || (!liveModel && captureArgument < 0), 'Shutdown checks must use only local fixtures');
   assert(!startPageOnly || (!liveModel && captureArgument < 0 && !safetyOnly && !shutdownOnly),
@@ -153,11 +159,13 @@ async function main() {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end('<!doctype html><title>Provider landing</title><h1>Provider landing page</h1><p>Provider details reached through a cross-site redirect. Fixture only, not a live offer.</p><a href="/provider-details">Provider details</a>');
   });
+  const qualityFixtures = require('./test-research.cjs').createResearchFixtures({ base: () => fixtureBase });
   const fixture = http.createServer(async (req, res) => {
     try {
       assert.equal(req.headers.authorization, undefined, 'Cloud key must not reach fixtures');
       const route = req.url.split('?')[0];
       hits.set(route, (hits.get(route) || 0) + 1);
+      if (qualityFixtures.serve(req, res, new URL(req.url, 'http://fixture.invalid'))) return;
       if (route.startsWith('/memory/')) {
         const name = route.split('/').at(-1);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -320,6 +328,8 @@ async function main() {
             return;
           }
           if (request.response_format) assert.equal(request.response_format.json_schema.name, recovering ? 'page_evidence_selection' : 'page_evidence');
+          const qualityReader = qualityFixtures.reader(input);
+          if (qualityReader) { respond(JSON.stringify(qualityReader)); return; }
           for (const value of privateValues) assert(!prompt.includes(value), 'A private value reached the quarantined reader');
           const text = recovering ? input.untrustedPage.excerpts.map(excerpt => excerpt.text).join('\n') : input.untrustedPage.text;
           const quotes = text.split(/\n|(?<=[.!?])\s+/)
@@ -539,6 +549,11 @@ async function main() {
             assert(current.headings.length > 0, 'Missing structured headings');
             assert(!current.links.some(link => link.url.startsWith('javascript:')), 'Unsafe link included');
           }
+          if (input.userGoal.startsWith('quality ')) {
+            const proposal = await qualityFixtures.decide(input);
+            if (!res.destroyed) respond(JSON.stringify(proposal));
+            return;
+          }
           if (input.userGoal.includes('live-monitor') && pages.length === 1) {
             activityModelWaiting = true;
             await new Promise(resolve => {
@@ -664,24 +679,41 @@ async function main() {
               query:`Austin to Cancun flights and hotels ${date.slice(0,4)} November 23 to 28 two adults two kids ages 8 and 15`,
               reason:`Use upcoming US Thanksgiving ${date}; room count and availability still need checking`});
           }
-          else if (input.userGoal.includes('compare desks') && pages.length >= 2) decision = JSON.stringify({
-            action: 'finish', answer: 'Cedar Desk is the budget option at $42 [2]. Grove Desk costs $68 and offers height adjustment [2]. Delivery and current stock remain unchecked.',
-            sources: [2], report: {
+          else if (input.userGoal.includes('compare desks') && pages.length >= 4) decision = JSON.stringify({
+            action: 'finish', answer: 'Cedar Desk is the budget option at $42 [3]. Grove Desk costs $68 and offers height adjustment [4]. Delivery and current stock remain unchecked.',
+            sources: [1, 2, 3, 4], report: {
+              intent: 'shopping',
               title: 'A desk for your space', summary: 'For a small room and lower budget, consider Cedar Desk. Choose Grove if height adjustment matters more.',
               recommendedOption: 0,
               options: [
-                { name: 'Cedar Desk', fit: 'Best fit for a smaller budget', details: 'The observed page lists $42 and a compact design.', tradeoffs: 'No height adjustment. Stock and delivery have not been checked.', sources: [2],
-                  destinations:[{sourceId:2,linkId:1,label:'View Cedar on the seller site'}] },
-                { name: 'Grove Desk', fit: 'Consider for adjustable working height', details: 'The observed page lists $68 and height adjustment.', tradeoffs: 'Heavier and more expensive. Stock and delivery remain unchecked.', sources: [2],
-                  destinations:[{sourceId:2,linkId:2,label:'View Grove on the seller site'}] },
+                ...['Cedar Desk', 'Grove Desk'].map((name, index) => ({
+                  name, fit: index ? 'Consider for adjustable working height' : 'Best fit for a smaller budget',
+                  details: index ? 'The observed page lists $68 and height adjustment.' : 'The observed page lists $42 and a compact design.',
+                  tradeoffs: index ? 'Heavier and more expensive. Stock and delivery remain unchecked.' : 'No height adjustment. Stock and delivery have not been checked.',
+                  sources: [index + 3],
+                  evidence: [{ sourceId: index + 3, quote: index ? 'Grove Desk costs $68, adjustable height, heavier.' : 'Cedar Desk costs $42, compact, no height adjustment.' }],
+                  offer: { currency: 'USD', basis: 'itemTotal', scope: 'One desk, delivery not included', exclusions: 'Live stock, delivery and final checkout fees are unchecked.',
+                    components: [{ kind: 'product', name, detail: 'One desk', unitAmountMinor: index ? 6800 : 4200, quantity: 1, sourceId: index + 3,
+                      quote: index ? 'Grove Desk costs $68, adjustable height, heavier.' : 'Cedar Desk costs $42, compact, no height adjustment.' }] },
+                  destinations: [{ sourceId: index + 3, linkId: null, label: index ? 'View Grove on the seller site' : 'View Cedar on the seller site' }],
+                })),
               ],
-              findings: [{ title: 'Budget versus flexibility', detail: 'The listed options differ in price and adjustability, not just brand.', sources: [2] }],
+              findings: [{ title: 'Budget versus flexibility', detail: 'The listed options differ in price and adjustability, not just brand.', sources: [3, 4] }],
               gaps: ['Live stock, shipping cost and final checkout prices were not verified.'],
             },
           });
           else if (input.userGoal.includes('compare desks') && pages.length === 1) decision = JSON.stringify({
             action: 'search', query: 'compare desks compact adjustable specifications', reason: 'Find more specific comparison evidence',
           });
+          else if (input.userGoal.includes('compare desks') && pages.length >= 2 && pages.length < 4) {
+            const name = pages.length === 2 ? 'Cedar seller page' : 'Grove seller page';
+            const source = pages[1];
+            const link = source.links.find(link => link.name === name);
+            assert(link, `Missing actually observed desk link: ${name}`);
+            decision = JSON.stringify({
+              action: 'followLink', sourceId: source.sourceId, linkId: link.id, reason: 'Read the specific seller page, not its search snippet',
+            });
+          }
           else if (input.userGoal.includes('invalid destination')) decision = JSON.stringify({
             action:'finish',answer:'Evidence [1]',sources:[1],
             report:{title:'Options',summary:'Comparison',recommendedOption:0,
@@ -907,6 +939,12 @@ async function main() {
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       const citationPage=route.match(/^\/citation-page\/([1-5])$/);
+      if (route === '/cedar' || route === '/grove') {
+        const name = route === '/cedar' ? 'Cedar Desk' : 'Grove Desk';
+        const quote = route === '/cedar' ? 'Cedar Desk costs $42, compact, no height adjustment.' : 'Grove Desk costs $68, adjustable height, heavier.';
+        res.end(`<!doctype html><title>${name}</title><h1>${name}</h1><p>${quote}</p><p>Delivery, stock and final checkout fees have not been checked.</p>`);
+        return;
+      }
       if(citationPage) {
         const number=Number(citationPage[1]);
         res.end(`<!doctype html><title>Citation fixture ${number}</title><h1>Fixture observation ${number}</h1>
@@ -926,7 +964,7 @@ async function main() {
           <a href="/flight-premium">Premium flight</a><a href="/hotel-studio">Studio hotel</a>
           <a href="/flight-budget">Budget flight</a><a href="/hotel-valley">Valley hotel</a>
           <a href="/flight-mid">Mid flight</a><a href="/hotel-park">Park hotel</a>
-          <a href="/cedar">Cedar seller</a><a href="/grove">Grove seller</a>`);
+          <a href="/cedar">Cedar Desk seller</a><a href="/grove">Grove Desk seller</a>`);
         return;
       }
       if (route === '/search' || route === '/travel' || route === '/unrelated') {
@@ -1217,6 +1255,10 @@ async function main() {
     const redesignChecks = memoryState => require(path.join(__dirname, 'test-redesign.cjs'))({
       ...browserUi, rpc, navigate, start, pending, terminal, tabSnapshot, trustedClick, fixtureBase,
       memoryUnavailableError: memoryState?.unavailableError,
+    });
+    const researchQualityChecks = () => require('./test-research.cjs').researchChecks({
+      ...browserUi, rpc, navigate, waitFor, approve, tabSnapshot, openResultTab, reopenFindings, trustedClick,
+      fixtures: qualityFixtures,
     });
     const memoryChecks = () => require(path.join(__dirname, 'test-memory.cjs'))({
       ...browserUi,
@@ -2226,7 +2268,8 @@ async function main() {
         await send({ type: 'closeTab', tabId: allTabs.active });
         await waitFor(async () => {
           const state = await tabSnapshot();
-          return state?.tabs.length === 1 && state.active !== allTabs.active && state.tabs[0].url === '';
+          return state?.tabs.length === 1 && state.active !== allTabs.active
+            && state.tabs[0].url === '' && !state.tabs[0].loading;
         }, 'closing the last tab restores a start tab');
         await focusHome();
         assert.equal(modelCalls, callsAfter);
@@ -3383,6 +3426,12 @@ async function main() {
       await closeTestBrowser();
       return;
     }
+    if (researchOnly) {
+      await researchQualityChecks();
+      assert.equal(fixtureError, undefined, fixtureError);
+      await closeTestBrowser();
+      return;
+    }
     if (memoryOnly || tabsOnly) {
       await memoryChecks();
       await closeTestBrowser();
@@ -3505,8 +3554,12 @@ async function main() {
         view = await rpc('/api/agent');
         if (view.status === 'awaitingApproval') await approve(view, true, view.researchPermission !== 'allResearch');
         else if (view.status === 'needsInput' && !replied) {
+          const reply = process.env.AIB_LIVE_REPLY || (!process.env.AIB_LIVE_GOAL
+            ? 'No other preferences: use the dates, travelers and rooms I gave, any budget, any airline, hotels near Universal Studios Hollywood.'
+            : null);
+          if (!reply) break;
           replied = true;
-          await replyTo(view, 'No other preferences: use the dates, travelers and rooms I gave, any budget, any airline, hotels near Universal Studios Hollywood.');
+          await replyTo(view, reply);
         } else if (view.status !== 'running') break;
         await delay(1000);
       }
@@ -3519,10 +3572,15 @@ async function main() {
         sources: view.sources.map(source => `${source.kind} ${source.url}`),
         report: view.report && { title: view.report.title, summary: view.report.summary, recommended: view.report.recommendedOption, gaps: view.report.gaps },
         options: view.report?.options.map(option => ({ name: option.name, price: money(option.offer?.totalMinor), fit: option.fit,
+          evidence: option.evidence, tradeoffs: option.tradeoffs,
           scope: option.offer?.scope, components: option.offer?.components.map(c => `${c.kind}: ${c.name} · ${c.detail} · "${c.quote}" × ${c.quantity}`),
           links: option.links.map(link => `${link.label} -> ${link.url.slice(0, 110)}`) })),
         steps: view.steps,
       }, null, 2));
+      if (process.env.AIB_LIVE_RESEARCH_OUTPUT) {
+        assert(path.isAbsolute(process.env.AIB_LIVE_RESEARCH_OUTPUT), 'Live research output must use an absolute private path');
+        await fs.writeFile(process.env.AIB_LIVE_RESEARCH_OUTPUT, JSON.stringify(view, null, 2));
+      }
       if (process.env.AIB_LIVE_SCREENSHOT && view.status === 'completed') {
         assert(path.isAbsolute(process.env.AIB_LIVE_SCREENSHOT));
         await browserSocket.command('Runtime.evaluate', { expression: 'document.querySelector(".ask-ai").click()' });
@@ -3535,7 +3593,7 @@ async function main() {
           await waitFor(async () => (await assistant.command('Runtime.evaluate', { expression: '!!document.querySelector(".assistant-tabs")', returnByValue: true })).result?.value, 'assistant rendered');
           await assistant.command('Runtime.evaluate', { expression:
             'Array.from(document.querySelectorAll(".assistant-tabs button")).find(button=>button.textContent==="Task mode").click()' });
-          await waitFor(async () => (await assistant.command('Runtime.evaluate', { expression: 'document.querySelectorAll(".findings-option").length>0', returnByValue: true })).result?.value, 'live options rendered');
+          await waitFor(async () => (await assistant.command('Runtime.evaluate', { expression: '!!document.querySelector(".research-results")', returnByValue: true })).result?.value, 'live findings rendered');
           await delay(800);
           const capture = await assistant.command('Page.captureScreenshot', { format: 'png' });
           await fs.writeFile(process.env.AIB_LIVE_SCREENSHOT, Buffer.from(capture.data, 'base64'));
@@ -3549,6 +3607,30 @@ async function main() {
       await waitFor(() => child.exitCode !== null, 'live web browser shutdown', 10000);
       assert.notEqual(view.status, 'running', 'Live task did not finish in time');
       assert.notEqual(view.status, 'failed', `Live task failed: ${view.error}`);
+      if (liveResearch) {
+        assert.equal(view.status, 'completed', 'A useful live shortlist must complete, not merely stop without a protocol error');
+        assert(view.report?.options.length >= 2, 'The live quality check requires at least two source-backed alternatives');
+        const destinations = new Set();
+        for (const option of view.report.options) {
+          assert(option.evidence?.length, `Missing exact observed evidence for ${option.name}`);
+          assert(option.evidence.every(quote => view.sources.some(source => source.id === quote.sourceId && source.kind === 'page')
+            && option.sources.includes(quote.sourceId)), 'Every option quote must be scoped to a directly read factual source');
+          const link = option.links[0];
+          assert(link?.visited && link.kind === 'page', 'Primary destinations must be actual pages read, not search or generic leads');
+          const url = new URL(link.url);
+          url.hash = '';
+          destinations.add(url.href);
+          if (process.env.AIB_LIVE_EXPECT_TERM) assert(option.evidence.some(quote => quote.quote.toLowerCase().includes(process.env.AIB_LIVE_EXPECT_TERM.toLowerCase())),
+            `Missing requested capability evidence for ${option.name}`);
+          if (!option.offer) {
+            const gaps = [option.tradeoffs, option.details, ...view.report.gaps].join(' ');
+            assert(/price|pricing|cost/i.test(gaps) && /unknown|unavailable|unverified|unchecked|not |no |missing|could not|does not|did not/i.test(gaps),
+              'Missing prices need an explicit evidence gap rather than an invented cheapest claim');
+          }
+        }
+        assert.equal(destinations.size, view.report.options.length, 'Every live option needs a distinct primary candidate page');
+        console.log('PASS: live research has at least two distinct directly read candidate pages, exact capability quotes, and verified prices or explicit price gaps');
+      }
       console.log(`PASS: live web task finished with status ${view.status}`);
       return;
     }
@@ -3821,7 +3903,7 @@ async function main() {
     assert.equal(view.researchPermission,'askEach','Grant expires on completion');
     assert(view.permissionEvents.some(event=>event.decision.includes('task research grant')));
     assert(view.permissionEvents.every(event=>Number.isFinite(Number(event.at))));
-    assert(view.report.options.every(option=>option.links.length===1 && !option.links[0].visited));
+    assert(view.report.options.every(option=>option.links.length===1 && option.links[0].visited && option.evidence.length === 1));
     await rpc('/api/agent/revoke-research',{taskId:view.id},409);
     console.log('PASS: task-scoped allow-all completes research, resolves observed direct links and expires; stale/contradictory grants rejected');
 
@@ -4449,7 +4531,7 @@ async function main() {
       view = await terminal();
       assert.equal(view.status, 'completed', view.error);
       assert.equal(view.searches.length, 2);
-      assert.equal(view.pagesRead, 2);
+      assert.equal(view.pagesRead, 4);
       assert(view.searches.every(search => search.sourceId !== null));
       assert.equal(view.report.options.length, 2);
       assert.equal(view.sources[0].kind, 'search');
@@ -4660,6 +4742,7 @@ async function main() {
     await navigationChecks();
     await multitabChecks();
     if (!liveModel && !capturedResponse && !liveWeb) {
+      await researchQualityChecks();
       const memoryState = await memoryChecks();
       await redesignChecks(memoryState);
     }

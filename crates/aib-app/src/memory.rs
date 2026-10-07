@@ -1496,6 +1496,19 @@ mod tests {
             Some(report.clone())
         );
         assert!(serde_json::from_value::<crate::agent::Report>(report).is_err());
+        archive.report.as_mut().unwrap()["options"][0]["evidence"] = serde_json::json!([
+            {"sourceId":1,"quote":"Original result supports a factual snapshot."}
+        ]);
+        let quoted = checked_archive(&serde_json::to_string(&archive).unwrap()).unwrap();
+        assert_eq!(
+            quoted.report.unwrap()["options"][0]["evidence"][0]["quote"],
+            "Original result supports a factual snapshot."
+        );
+        archive.report.as_mut().unwrap()["options"][0]["evidence"][0]["sourceId"] =
+            serde_json::json!(2);
+        assert!(checked_archive(&serde_json::to_string(&archive).unwrap()).is_err());
+        archive.report.as_mut().unwrap()["options"][0]["evidence"][0]["sourceId"] =
+            serde_json::json!(1);
         archive.report.as_mut().unwrap()["options"][0]["offer"] = serde_json::json!({
             "currency":"USD","basis":"itemTotal","scope":"One item [1].","exclusions":"Taxes not checked [1].",
             "totalMinor":4200,"components":[{"kind":"product","name":"Product","detail":"One item",

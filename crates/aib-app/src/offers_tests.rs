@@ -108,6 +108,12 @@ fn literal_price_parser_is_bounded_and_currency_specific() {
         ("CAD 42.00", "CAD", 4200),
         ("EUR 99.00", "EUR", 9900),
         ("USD 0.00", "USD", 0),
+        ("Flight from Austin USD 42.50 per person", "USD", 4250),
+        (
+            "Was from $42.50; the selected variant costs USD 49.00.",
+            "USD",
+            4900,
+        ),
     ] {
         assert!(quoted_amount(quote, currency, amount), "{quote}");
     }
@@ -118,7 +124,30 @@ fn literal_price_parser_is_bounded_and_currency_specific() {
         "CAD $42.50",
         "42.50",
         "$9999999999999999999999999999",
+        "From $42.50",
+        "Prices starting at USD 42.50",
+        "As low as $42.50",
+        "From: USD $42.50",
     ] {
         assert!(!quoted_amount(quote, "USD", 4250), "{quote}");
+    }
+    for (page, quote, expected) in [
+        ("From $42.50", "$42.50", false),
+        ("Prices starting at USD 42.50", "USD 42.50", false),
+        ("From USD $42.50", "$42.50", false),
+        ("As low as $42.50", "$42.50", false),
+        ("Flight from Austin USD 42.50 per person", "USD 42.50", true),
+        (
+            "From $39.00. The selected variant costs $42.50.",
+            "$42.50",
+            true,
+        ),
+        ("Product price\nUSD 42.50", "USD 42.50", true),
+    ] {
+        assert_eq!(
+            observed_amount(page, quote, "USD", 4250),
+            expected,
+            "{page}"
+        );
     }
 }

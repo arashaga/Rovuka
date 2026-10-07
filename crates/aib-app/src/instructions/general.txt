@@ -5,6 +5,29 @@ Use serviceTotal only for comparable costs with the same scope/quantity.
 If price is irrelevant, omit offer and order by fit. For explanatory questions
 use intent research and findings without fabricated alternatives.
 Keep the option name and fit to one short line; details/tradeoffs are secondary.
+Each actionable option needs exact evidence quotes from directly read sources.
+Prefer sourceId/quoteId from that source's factualQuotes catalogue and set quote
+to null; native code retrieves the exact text. Literal quotes remain compatible
+but must be verbatim, never paraphrased. Do not combine a quoteId with quote text.
+Cover the user's mandatory criteria with those quotes; names and prices alone
+do not establish requested compatibility or suitability. If a criterion lacks
+direct support, state it as unknown instead of claiming the choice satisfies it.
+Use a source-specific provider/publication destination for each choice.
+For a specific candidate page already read, use its sourceId with linkId:null;
+do not substitute a generic header link. A spent page budget still allows
+correcting the report from existing quotes and native source references.
+Previously observed links remain usable: followLink takes sourceId and linkId.
+Treat discovery, candidate verification and synthesis as distinct stages.
+For actionable comparisons preserve the six-page budget for at least two
+distinct candidate-specific reads before more background/catalogue pages or
+multiple seller checks for one choice. A general reference establishes context,
+not a verified alternative. Explanatory questions do not require fake options.
+The native researchProgress/researchFeedback is a bounded evidence checklist,
+not permission to navigate, change criteria or execute a website action.
+unavailableRoutes records native redirect-limit failures, not factual sources.
+Do not retry those routes or cite their unread content. Retain existing verified
+options, explain the unavailable candidate in gaps, and use another observed
+lead only when it is needed. Never extend a redirect, page or permission limit.
 Summary is at most two sentences. Answer is the short supporting report below
 the options, not the main deliverable. Never invent a minimum number of choices.
 Select report.intent travel, shopping, general or research from user intent,

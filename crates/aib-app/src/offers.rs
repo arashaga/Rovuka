@@ -79,6 +79,23 @@ fn normalized(value: &str) -> String {
 
 // Deliberately supports currency-prefixed English decimal prices only.
 fn quoted_amount(quote: &str, currency: &str, amount: u64) -> bool {
+    price_in_context(quote, currency, amount, "")
+}
+
+fn observed_amount(observed: &str, quote: &str, currency: &str, amount: u64) -> bool {
+    if !quoted_amount(quote, currency, amount) {
+        return false;
+    }
+    let observed = normalized(observed);
+    let quote = normalized(quote);
+    observed.match_indices(&quote).any(|(index, _)| {
+        let mut before: Vec<_> = observed[..index].split_whitespace().rev().take(3).collect();
+        before.reverse();
+        price_in_context(&quote, currency, amount, &before.join(" "))
+    })
+}
+
+fn price_in_context(quote: &str, currency: &str, amount: u64, before: &str) -> bool {
     if ["USD", "EUR", "GBP", "CAD", "AUD"]
         .iter()
         .any(|code| *code != currency && quote.contains(code))
@@ -93,6 +110,25 @@ fn quoted_amount(quote: &str, currency: &str, amount: u64) -> bool {
     };
     [currency, symbol].iter().any(|prefix| {
         quote.match_indices(prefix).any(|(index, _)| {
+            let context = format!("{before} {}", &quote[..index]);
+            let leading = context.trim_end();
+            let leading = leading
+                .strip_suffix(currency)
+                .unwrap_or(leading)
+                .trim_end()
+                .to_ascii_lowercase();
+            let words: Vec<_> = leading
+                .split_whitespace()
+                .rev()
+                .take(3)
+                .map(|word| word.trim_matches(|character: char| !character.is_alphanumeric()))
+                .collect();
+            if matches!(
+                words.as_slice(),
+                ["from", ..] | ["at", "starting" | "starts", ..] | ["as", "low", "as", ..]
+            ) {
+                return false;
+            }
             let tail = quote[index + prefix.len()..].trim_start();
             let token: String = tail
                 .chars()
@@ -188,11 +224,14 @@ impl Offer {
                 .filter(|page| page.url == source.url)
                 .context("Price observation is unavailable")?;
             let quote = normalized(&component.quote);
-            if !normalized(&observation.text).contains(&quote)
-                || !quoted_amount(&quote, &self.currency, component.unit_amount_minor)
-            {
+            if !observed_amount(
+                &observation.text,
+                &quote,
+                &self.currency,
+                component.unit_amount_minor,
+            ) {
                 bail!(
-                    "Price amount/quote does not match observed page text; omit unverified pricing"
+                    "Price amount/quote does not establish an exact observed price; omit starting/from or unverified pricing"
                 );
             }
             self.total_minor = self

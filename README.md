@@ -528,7 +528,7 @@ objects, three copies, extra prose and duplicate JSON keys remain rejected.
 
 Per-option source arrays may be derived when omitted/empty **only from references
 already inside that same option**: inline citations, destination source IDs and
-price-component references. Native code deduplicates these IDs and checks them
+price-component or exact option-evidence references. Native code deduplicates these IDs and checks them
 against the declared finish sources, visited pages, observed links and price
 evidence. It never substitutes the entire top-level source list or overwrites a
 nonempty declared option list. Options without any own references still fail.
@@ -628,7 +628,9 @@ Activity, permissions, searches and pages read as plain text.
 Results also degrade instead of failing: an option price whose quotation is not
 found on the cited page is removed (shown as **Price unavailable**), and an option
 link that does not resolve to an observed link is dropped. Each removal appears
-in Activity. Neither can turn into an invented price or URL.
+in Activity. Neither can turn into an invented price or URL. A card must still
+pass the native shortlist evidence/destination review below; removing a bad
+price or link does not make an unsupported recommendation acceptable.
 
 For an opt-in end-to-end check on the **real web**,
 `node .\scripts\test-agent.cjs --live-web` runs your configured model on
@@ -636,10 +638,20 @@ For an opt-in end-to-end check on the **real web**,
 a disposable, signed-out profile with real Google search. It grants research
 permission on the first approval, answers one clarification generically, waits
 up to 11 minutes, then prints the result (each option's components, quotes and
-scope), Activity and log tail. Set `AIB_LIVE_SCREENSHOT=<absolute .png path>` to
+scope), Activity and log tail. A custom goal only receives a clarification reply
+when `AIB_LIVE_REPLY` is explicitly set; it never inherits unrelated travel
+preferences. Set `AIB_LIVE_SCREENSHOT=<absolute .png path>` to
 also capture the finished results screen. It incurs model
 usage and real site traffic; checkout/account pages, form submissions and
 downloads stay blocked. Site availability, bot checks and prices vary over time.
+
+Add `--live-research` to require a useful shortlist: at least two alternatives,
+exact directly read option quotes, distinct read primary destinations and
+verified prices or explicit missing-price gaps. Optional `AIB_LIVE_EXPECT_TERM`
+checks that the requested capability appears in each option's quotes.
+`AIB_LIVE_RESEARCH_OUTPUT=<absolute private JSON path>` saves the complete
+native result locally. This is an opt-in live test with provider costs, never
+a CI/default fixture or universal accuracy certification.
 
 For an opt-in real-provider smoke test, `node .\scripts\test-agent.cjs --live-model`
 uses the currently configured model/key without changing settings and sends only
@@ -682,6 +694,11 @@ The results view is action-first: a short summary, then numbered choices and
 provider links. Supporting reports, caveats, source pages and search/activity
 history sit **below the options**, collapsed when there is a shortlist.
 Each option's detailed evidence and tradeoffs are expandable, not a wall of prose.
+The details include its exact source-checked factual quotes. General comparisons
+without priced offers use a fit heading rather than an irrelevant missing-price
+banner; unpriced shopping/travel options still clearly disclose unavailable prices.
+Supplied option quotes are checked even in brief mode; older quote-free brief
+outputs remain compatible.
 
 The default **Result format → Actionable options · prices & direct links** requires a
 structured final report, rather than accepting only prose. The planner is asked
@@ -714,7 +731,10 @@ USD/EUR/GBP/CAD/AUD with English-style currency-prefixed decimal prices are
 currently supported. Other formats require an unpriced option, not guessed
 conversion. Search snippets cannot support a priced offer. A flight + hotel trip
 subtotal requires both priced components. Exclusions remain visible in details;
-taxes, bags, resort fees and shipping are not assumed included.
+starting/from prices cannot establish an exact variant total and remain unpriced,
+even when the quotation was observed or omits the qualifier: native validation
+also checks the immediately preceding protected source text.
+Taxes, bags, resort fees and shipping are not assumed included.
 These checks establish snapshot provenance and arithmetic, **not** semantic
 correctness, live inventory or a bookable quote. The bounded reader cannot
 operate airline/hotel date pickers; if provider pages do not expose suitable
@@ -744,10 +764,71 @@ attempt. In **Research brief / explanation**, models that return the older answe
 and receive a readable brief, without manufactured option cards.
 
 Search pages are labeled **Search lead**, not verified offers. The planner is
-instructed to follow relevant publisher/provider links after useful searches
-instead of repeatedly rephrasing queries, and to finish with explicit gaps when
-the six-page budget is exhausted. This is model guidance, not a guarantee that
-every model will research optimally.
+given native progress: remaining pages, factual-evidence gaps and up to 48 safe,
+unvisited observed links with their source/link IDs. It can follow a link from
+any earlier page without wasting a page returning to that search. An omitted
+`followLink.sourceId` retains the older latest-page behavior; IDs cannot cross
+task/source boundaries. Successfully approved and settled redirects preserve
+native requested-to-landed provenance, so read candidate links need not keep
+opening an opaque search wrapper.
+
+The same **discover -> verify candidates -> synthesize** loop applies to
+products, courses, software, services and research, not a list of hardcoded
+brands or questions. The planner is guided to reserve its bounded page budget
+for distinct candidate-specific reads before extra catalogues or price-shopping
+for one choice. A general reference is context, not a verified alternative;
+explanatory questions do not need fabricated options.
+Before publishing nonempty actionable options, native
+review requires exact quotes from directly read pages identifying the named
+choice and specific observed destinations. A shared general catalogue is not
+a per-product shortlist. Verified travel totals may legitimately share the
+reviewed public travel-results page.
+
+A weak finish receives at most **two completion-review rounds** with explicit
+issues. The model can read a missing candidate within the existing budget,
+return fewer supported alternatives with gaps, or give an honest limited brief
+without unsupported option cards. Repeated unsupported recommendations become
+**No verified result**, with the source trail retained. These reviews do not add
+pages, questions, time, permission or an independent semantic fact-checker.
+Exact option evidence is limited to six short quotes per option; prices still
+use the original protected observations and native arithmetic.
+Models can select `{sourceId, quoteId, quote: null}` from each observation's
+native `factualQuotes` catalogue instead of retyping a quotation. IDs are scoped
+to that source and bounded to 24; native code retrieves the checked exact text,
+enforces the same six-quote/700-byte limits and removes IDs before output/archive.
+Mixed text/reference, missing, out-of-range, moved-source and foreign references
+are rejected. Older exact literal quotes remain compatible.
+Native review also retains bounded source-checked named-candidate quotations
+from the option's declared directly read sources, so exact variant descriptions
+are not lost when the model selects only secondary feature quotes.
+Name matching tolerates an optional leading site namespace only when it matches
+a native destination hostname label and the remaining name is observed
+exactly. A page need not repeat its brand beside its product name; arbitrary
+brand/variant removal and fuzzy name matching are not allowed.
+Already-read candidate pages can repair a destination even at the page limit;
+opening that source uses a null link ID, not a site's unrelated navigation link.
+Native code repairs an unrelated result link directly when a declared,
+source-checked quote identifies a unique matching candidate page already read.
+The correction is recorded in Activity; it adds no model round, URL authority,
+page read or permission. Ambiguous/shared catalogues still require evidence.
+Specific destinations become the primary action, and repeated catalogue targets
+cannot pass merely because the listing contains each product's heading.
+If an observed candidate exceeds the three-cross-site-redirect limit, its next
+destination stays blocked. Research may retain earlier evidence and choose a
+different lead after the current document is revalidated. At most two such
+failures recover within the existing task-step/time/page bounds; failed routes
+are excluded from future tools and never become factual sources or redirect
+aliases. Activity and native model progress explain the limitation. Forbidden
+destinations, same-site loops, lease loss, failed readiness and Stop still fail
+closed; their guards are not bypassed.
+
+A valid-empty research reader consumes its page but exposes only sanitized
+navigation metadata to the actor. Safe links can lead to a factual source;
+empty sources cannot substantiate claims, quotes or prices. Raw rejected prose
+is never a fallback. Provider errors, malformed reader responses and selected-tab
+comparison failures remain explicit. These provenance checks improve research
+quality, but do not guarantee semantic suitability, certification, availability
+or successful browsing on every site or with every model.
 
 **Back to conversation** restores the sidebar. Opening a source/revisiting a
 search opens a new tab and returns to normal browsing. **View findings** reopens the same
@@ -1196,6 +1277,21 @@ For a focused, loopback-only safety run after building:
 node .\scripts\test-agent.cjs --safety-only
 ```
 
+For generic research-quality regression coverage:
+
+```powershell
+node .\scripts\test-agent.cjs --research-only
+```
+
+Nine groups use actual native browser/UI flows and fictional local
+product/course/software pages. They cover earlier-source links and opaque
+redirects, exact option quotes and prices, unpriced alternatives, specific
+destinations, weak-search/shared-catalogue/forged-quote rejection, bounded
+honest completion, valid-empty navigation, foreign source IDs and revoke/Stop.
+The full suite includes these checks, and Windows CI runs them sequentially.
+They use a mock model, no real brands or provider credentials; private live
+results and screenshots are never uploaded.
+
 For scoped selected-tab, comparison and preserved-research regression coverage:
 
 ```powershell
@@ -1346,9 +1442,9 @@ show either actual website content or a visible native failure, retaining the
 address. It does not solve site challenges, change settings or certify booking
 support. All browsers use disposable profiles and close normally.
 
-Current Windows verification: **128 workspace Rust tests and all 171 native
-regression groups pass**, preserving every one of the 153 published baseline
-groups and adding 18 local-memory groups. Eleven Rust tests cover memory storage,
+Current Windows verification: **137 workspace Rust tests and all 188 native
+regression groups pass**, preserving every one of the 179 published baseline
+groups and adding nine evidence-driven research groups. Memory unit tests cover storage,
 privacy/retention/consent/archive validation, single-owner/lazy settings and
 nonblocking capture-policy checks. The 16 scoped multi-tab, comparison and preserved-research
 groups cover trusted
@@ -1371,11 +1467,18 @@ mock model-protocol checks**, including wrong-query and wrong-displayed-result
 failures, Stop and both 320px themes. UI type-check, production UI build, standard
 native build, formatting and editor diagnostics also pass. Fixture UI transitions
 and live-activity checks use explicit synchronization, not fixed delay guesses.
+The exact original Teams-headset request also completed with the unchanged
+selected model: two distinct directly read manufacturer product pages, exact
+Teams-certification quotes, a natively checked price for one choice and an
+explicit starting-price gap for the other. The fit caveats, direct destinations
+and source quotations were inspected, not just the completed status. This is
+one observed live result, not universal compatibility or market coverage.
 The earlier Phase 6 Rust/Python Wikipedia request also completed with the
 configured live model, including an actual rejected-quote recovery, two
 source-bound rows, three criteria and preserved originals/new-tab source links.
 Phase 7's new regressions use local pages and mock models, not that historical
-live-model run. Live model results can vary; this is not a guarantee of all
+live-model run; the nine research-quality groups are also controlled fixtures.
+Live model results can vary; this is not a guarantee of all
 future outputs.
 
 The actual native live-hotel test followed bare `hotel.com` to secure Hotels.com

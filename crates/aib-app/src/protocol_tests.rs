@@ -52,7 +52,7 @@ fn schema_is_strict_mode_compatible() {
 
 #[test]
 fn strict_shaped_decisions_map_onto_native_actions() {
-    let nulls = json!({"action":null,"query":null,"flight":null,"stay":null,"linkId":null,
+    let nulls = json!({"action":null,"query":null,"flight":null,"stay":null,"linkId":null,"sourceId":null,
         "reason":null,"message":null,"answer":null,"sources":null,"report":null});
     let with = |pairs: Value| {
         let mut value = nulls.clone();
@@ -70,7 +70,15 @@ fn strict_shaped_decisions_map_onto_native_actions() {
     ));
     assert!(matches!(
         parse(with(json!({"action":"followLink","linkId":3}))).unwrap(),
-        Decision::FollowLink { link_id: 3, ref reason } if reason == "missing"
+        Decision::FollowLink { link_id: 3, source_id: None, ref reason } if reason == "missing"
+    ));
+    assert!(matches!(
+        parse(with(json!({"action":"followLink","sourceId":2,"linkId":3}))).unwrap(),
+        Decision::FollowLink {
+            link_id: 3,
+            source_id: Some(2),
+            ..
+        }
     ));
     let flight = json!({"origin":"aus","destination":"LAX","departDate":"2026-11-23","returnDate":"2026-11-28",
         "adults":2,"children":2,"infants":0,"cabin":"economy"});

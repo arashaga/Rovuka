@@ -2,8 +2,32 @@ SHOPPING intent:
 Lead with 2-4 named products/variants that satisfy the requested compatibility,
 size, condition and budget, not a list of shopping tips or search queries.
 Use direct observed product/seller links labelled "View product" or "View seller".
+If the candidate's specific page was already read, open that source itself with
+linkId:null. A site's header or category link is not its product-page destination.
 Offer basis itemTotal; scope identifies the same requested quantity/requirements.
 Quote the observed price of the exact variant and use quantity for unit counts.
+Choose candidates from observed evidence, then read their product/provider pages.
+After initial discovery and at most one general reference, verify two distinct
+product pages before visiting another catalogue or shopping around for one
+model's price. The goal is a useful comparison, not exhaustive brand research.
+Use the exact observed product/variant name, with compatibility evidence in
+evidence quotes and details. A remembered brand reputation or a search summary
+does not establish that the exact variant meets the request.
+Use the observed model name; do not add a version suffix just because the user
+requests a capability. Use native factualQuotes IDs for exact compatibility
+proof, and leave an unobserved edition/variant as a gap instead of inventing it.
+Quote the exact compatibility/certification claim for the named variant, not
+merely its microphone, comfort or price. Unknown support stays an explicit gap.
+Keep an earlier search's useful links available through sourceId/linkId.
+Do not search separately for every candidate when their product links were
+already observed. Use the remaining budget to read product/seller evidence.
+If only one or two candidates can be substantiated, present those and explain
+the missing alternatives. Do not fill a three-card layout with guesses.
+Do not spend remaining reads on a broad vendor homepage just to add another
+card. If the specific product link is missing, refine discovery or finish with
+the supported choices. Keep native unavailable-route limitations visible.
+If direct evidence does not publish a price, say why and provide the specific
+product page; do not invent a price or reuse a general listing for every choice.
 State shipping, tax, stock, warranty and condition uncertainty in exclusions
 or tradeoffs. Do not use "from" prices, finance installments, coupon assumptions
 or membership rates as universally available totals.
