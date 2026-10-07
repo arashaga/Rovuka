@@ -272,9 +272,9 @@ async function researchChecks({ rpc, navigate, waitFor, approve, send, tabSnapsh
   await send({ type: 'openAssistant', panel: 'chat' });
   pane = await until(() => connect('assistant'), 10000, 'research assistant connection');
   await until(() => ui('!!document.querySelector(".assistant-tabs")'), 10000, 'research workspaces ready');
-  await ui('Array.from(document.querySelectorAll(".assistant-tabs button")).find(button => button.textContent === "Task mode").dataset.qualityTask = "true"');
-  await trustedClick(pane, '[data-quality-task]');
-  await ui('document.querySelector("[data-quality-task]").removeAttribute("data-quality-task")');
+  const taskTab = '.assistant-primary-tabs button:nth-of-type(2)';
+  assert.equal(await ui(`document.querySelector(${JSON.stringify(taskTab)})?.textContent`), 'Task mode');
+  await trustedClick(pane, taskTab);
   await until(() => ui('document.querySelectorAll(".findings-option").length === 2'), 10000, 'verified options workspace');
   await trustedClick(pane, '.option-details summary');
   assert.equal(await ui('document.querySelectorAll(".option-evidence-quotes p").length'), 2);

@@ -1082,8 +1082,9 @@ UI and standard native executable, checks formatting, runs serial Rust workspace
 tests and repeats the relative-date native fixture evaluations with a mock model.
 It uploads only the metadata JSON, not profiles, settings, screenshots or logs.
 No paid provider or secret is needed. The workflow has been added; remote
-GitHub execution is not claimed until it is published and run. Local full
-regression and optional live-site tests are separate from this CI benchmark.
+results must be checked against the exact published commit in GitHub Actions.
+Local full regression and optional live-site tests are separate from this CI
+benchmark; a mock result is not real-site certification.
 
 ### Phase 4 increment: privacy shield and local task audit
 
