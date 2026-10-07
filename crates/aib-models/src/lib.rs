@@ -300,6 +300,27 @@ pub struct ModelStream {
 }
 
 static PLAIN_ONLY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static HTTP_CLIENTS: OnceLock<Mutex<[Option<Client>; 2]>> = OnceLock::new();
+
+fn model_http_client(local_endpoint: bool) -> anyhow::Result<Client> {
+    let mut clients = HTTP_CLIENTS
+        .get_or_init(|| Mutex::new([None, None]))
+        .lock()
+        .map_err(|_| anyhow::anyhow!("The model HTTP client cache lock is poisoned"))?;
+    let cached = &mut clients[usize::from(local_endpoint)];
+    if let Some(client) = cached {
+        return Ok(client.clone());
+    }
+    let mut builder = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(15));
+    if local_endpoint {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().context("Creating model HTTP client")?;
+    *cached = Some(client.clone());
+    Ok(client)
+}
 
 fn schema_support_key(settings: &ModelSettings) -> String {
     format!(
@@ -415,13 +436,7 @@ async fn send(
     let responses_api = is_openai_responses(settings, &endpoint);
 
     let local_endpoint = is_loopback(&endpoint);
-    let mut client = Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(15));
-    if local_endpoint {
-        client = client.no_proxy();
-    }
-    let client = client.build().context("Creating model HTTP client")?;
+    let client = model_http_client(local_endpoint)?;
     let mut request = client.post(endpoint);
     let mut body = match settings.provider {
         Provider::OpenAiCompatible if responses_api => {
@@ -1017,6 +1032,106 @@ mod tests {
             text.push_str(&delta.unwrap());
         }
         text
+    }
+
+    #[tokio::test]
+    async fn model_connections_are_reused_without_carrying_auth_or_following_redirects() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let redirect_target = TcpListener::bind("127.0.0.1:0").unwrap();
+        redirect_target.set_nonblocking(true).unwrap();
+        let redirect_address = redirect_target.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut credentials = Vec::new();
+            for index in 0..4 {
+                let mut line = String::new();
+                assert!(
+                    reader.read_line(&mut line).unwrap() > 0,
+                    "Expected another request on the original connection"
+                );
+                assert!(line.starts_with("POST "));
+                let mut length = 0;
+                let mut authorization = None;
+                loop {
+                    line.clear();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap();
+                        } else if name.eq_ignore_ascii_case("authorization") {
+                            authorization = Some(value.trim().to_owned());
+                        }
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["model"], "pooled-transport-fixture");
+                credentials.push(authorization);
+                if index == 3 {
+                    write!(reader.get_mut(), "HTTP/1.1 302 Found\r\nLocation: http://{redirect_address}/unapproved\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                } else {
+                    let data = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n";
+                    write!(reader.get_mut(), "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{data}", data.len()).unwrap();
+                }
+                reader.get_mut().flush().unwrap();
+            }
+            credentials
+        });
+        let settings = ModelSettings {
+            base_url: format!("http://{address}/v1"),
+            model: "pooled-transport-fixture".into(),
+            ..ModelSettings::default()
+        };
+        let schema = json!({"type":"object"});
+        let output = OutputSchema {
+            name: "decision",
+            schema: &schema,
+        };
+        tokio::time::timeout(Duration::from_secs(8), async {
+            for key in [
+                Some("fixture-pool-first"),
+                Some("fixture-pool-second"),
+                None,
+            ] {
+                let reply = structured_stream(&settings, key, "Decide", "fixture", &output)
+                    .await
+                    .unwrap();
+                assert_eq!(collect(reply.stream).await, "ok");
+            }
+            let error = match structured_stream(&settings, None, "Decide", "fixture", &output).await
+            {
+                Ok(_) => panic!("An unchecked model redirect must not be accepted"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("HTTP 302"));
+        })
+        .await
+        .expect("Pooled request sequence must finish without opening another connection");
+        assert_eq!(
+            server.join().unwrap(),
+            [
+                Some("Bearer fixture-pool-first".to_owned()),
+                Some("Bearer fixture-pool-second".to_owned()),
+                None,
+                None,
+            ]
+        );
+        assert_eq!(
+            redirect_target.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
     }
 
     #[tokio::test]

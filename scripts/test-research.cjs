@@ -10,6 +10,7 @@ function createResearchFixtures({ base }) {
     products: ['Cedar Audio', 'Grove Audio'],
     courses: ['Sable Workshop', 'Birch Workshop'],
     software: ['Mica Library', 'Quartz Library'],
+    identities: ['Cedar Works Listening Device', 'Grove Works Listening Device'],
     unpriced: ['Cedar Audio', 'Grove Audio'],
     starting: ['Cedar Audio', 'Grove Audio'],
   };
@@ -59,8 +60,11 @@ function createResearchFixtures({ base }) {
       paragraphs = ['This fixture intentionally has no accepted factual reader quotes.'];
     } else {
       const index = parts[3] === 'b' ? 1 : 0;
-      title = names[index];
+      title = kind === 'identities'
+        ? `Listening Device with Noise Cancellation - ${index ? 'Grove Works' : 'Cedar Works'}`
+        : names[index];
       paragraphs = [facts(kind, index)];
+      if (kind === 'identities') paragraphs.push(facts(kind, 1 - index));
       state.reads.push(`${kind}/${parts[3]}`);
     }
     links.push([`${base()}/quality/${kind}/catalogue`, 'View all available choices']);
@@ -82,6 +86,11 @@ function createResearchFixtures({ base }) {
       const lead = sources.find(source => source.kind === 'search');
       const leadLink = lead && input.pages[lead.id - 1].links.find(link => link.name === `Read ${name}`);
       const sourceIds = lead ? [lead.id, source.id].filter((id, position, ids) => ids.indexOf(id) === position) : [source.id];
+      if (kind === 'identities') {
+        for (const related of sources.filter(candidate => named.some((_, position) => candidate.url === pageUrl(kind, position)))) {
+          if (!sourceIds.includes(related.id)) sourceIds.push(related.id);
+        }
+      }
       const proof = input.goal.includes(' quote-refs') && !searchOnly
         ? input.pages[source.id - 1].factualQuotes.find(quote => quote.quote.includes('supports ExampleMeet'))
         : null;
@@ -97,7 +106,7 @@ function createResearchFixtures({ base }) {
           linkId: shared ? null : leadLink?.id ?? null,
           label: shared ? 'View all available choices' : `View ${name}`,
         }],
-        offer: kind === 'products' || kind === 'starting' ? {
+        offer: kind === 'products' || kind === 'starting' || kind === 'identities' ? {
           currency: 'USD', basis: 'itemTotal', scope: 'One headset, shipping and stock unchecked',
           exclusions: 'Shipping, tax, stock and live availability are unchecked.',
           components: [{ kind: 'product', name, detail: 'One reviewed USB headset', unitAmountMinor: index ? 14900 : 11900,
@@ -105,12 +114,20 @@ function createResearchFixtures({ base }) {
         } : null,
       };
     });
+    if (kind === 'identities') {
+      for (const option of options) {
+        const related = sources.find(source => source.id !== option.evidence[0].sourceId && source.kind === 'page');
+        const proof = related && input.pages[related.id - 1].factualQuotes.find(quote => quote.quote.includes(option.name));
+        assert(proof, 'The related-product fixture must include a genuine cross-page mention');
+        option.evidence.push({ sourceId: related.id, quoteId: proof.quoteId, quote: null });
+      }
+    }
     const cited = [...new Set(options.flatMap(option => option.sources))];
     const claims = [...new Set(options.flatMap(option => option.evidence.map(quote => quote.sourceId)))];
     return {
       action: 'finish', answer: `Options from the pages actually read ${claims.map(id => `[${id}]`).join(' ')}.`, sources: cited,
       report: {
-        intent: kind === 'products' || kind === 'unpriced' || kind === 'starting' ? 'shopping' : 'general',
+        intent: kind === 'products' || kind === 'unpriced' || kind === 'starting' || kind === 'identities' ? 'shopping' : 'general',
         title: 'Reviewed choices', summary: 'Review the exact variant and supporting evidence.',
         recommendedOption: 0, options, findings: [],
         gaps: kind === 'unpriced' ? ['Prices are not published, so no cheapest option is claimed.'] : ['Suitability is a model judgement, not an independent certification.'],
@@ -127,6 +144,14 @@ function createResearchFixtures({ base }) {
     state.requests++;
     const kind = kindOf(input.goal);
     state.progress.push(input.researchProgress);
+    assert.deepEqual(input.researchProgress.readDestinations.map(entry => entry.sourceId),
+      input.pages.filter(page => page.sourceKind === 'page' && page.factualQuotes.length).map(page => page.sourceId));
+    for (const entry of input.researchProgress.readDestinations) {
+      assert.deepEqual(entry.destination, { sourceId: entry.sourceId, linkId: null, label: 'View source' });
+      assert.equal(entry.observedTitle, input.pages[entry.sourceId - 1].title);
+      assert(entry.trust.includes('not a browser action'));
+      assert(!input.researchProgress.availableLinks.some(link => link.url === input.sources[entry.sourceId - 1].url));
+    }
     if (input.researchFeedback) state.feedback.push(input.researchFeedback);
     if (input.goal.includes(' empty')) {
       if (input.sources.length === 1) {
@@ -184,7 +209,7 @@ function createResearchFixtures({ base }) {
       return decision;
     }
     if (input.goal.includes(' unchecked')) return finish(input, kind, { searchOnly: true });
-    if (input.sources.length === 1 && !input.researchFeedback && !input.goal.includes(' wrong-links') && !input.goal.includes(' redirect-recovery')) return finish(input, kind, { searchOnly: true });
+    if (input.sources.length === 1 && kind !== 'identities' && !input.researchFeedback && !input.goal.includes(' wrong-links') && !input.goal.includes(' redirect-recovery')) return finish(input, kind, { searchOnly: true });
     if (input.sources.length === 1 && (input.goal.includes(' revoke') || input.goal.includes(' stop'))) {
       state.pending = true;
       await new Promise(resolve => { held = resolve; });
@@ -196,7 +221,15 @@ function createResearchFixtures({ base }) {
       assert(link, 'Earlier-source lead must remain available after reading another page');
       return { action: 'followLink', sourceId: link.sourceId, linkId: link.linkId, reason: 'Read the distinct candidate page' };
     }
-    return finish(input, kind, { forged: input.goal.includes(' forged') });
+    const decision = finish(input, kind, { forged: input.goal.includes(' forged') });
+    if (kind === 'identities') {
+      decision.report.options.forEach(option => {
+        const sourceId = option.evidence[0].sourceId;
+        const link = input.pages[sourceId - 1].links.find(link => link.name === 'View all available choices');
+        option.destinations = [{ sourceId, linkId: link.id, label: 'View candidate page' }];
+      });
+    }
+    return decision;
   }
 
   function reader(input) {
@@ -300,6 +333,25 @@ async function researchChecks({ rpc, navigate, waitFor, approve, send, tabSnapsh
   await pane.command('Emulation.clearDeviceMetricsOverride');
   check('research source quotes and specific result controls fit both 320px themes without widening the findings workspace');
 
+  const identities = await settle(await begin('quality identities quote-refs'));
+  assert.equal(identities.status, 'completed', identities.error);
+  assert.equal(identities.pagesRead, 3);
+  assert.equal(fixtures.state.feedback.length, 0, 'Checked body identity must not waste completion reviews on differently ordered titles');
+  assert.equal(identities.report.options.length, 2);
+  identities.report.options.forEach((option, index) => {
+    assert(option.evidence.some(proof => proof.quote.includes(option.name)));
+    assert.equal(option.links.length, 1, 'Native correction replaces the primary destination without adding actions');
+    assert.equal(option.links[0].sourceId, index + 2);
+    assert.equal(option.links[0].url, fixtures.pageUrl('identities', index));
+    assert.equal(option.links[0].visited, true);
+    assert.equal(option.offer.totalMinor, index ? 14900 : 11900);
+    assert(!identities.sources.find(source => source.id === index + 2).title.includes(option.name));
+  });
+  assert.equal(identities.steps.filter(step => step.includes('used the source-checked candidate page already read')).length, 2);
+  assert(identities.report.options.every(option => option.evidence.some(proof => proof.sourceId !== option.links[0].sourceId
+    && proof.quote.includes(option.name))), 'Related-page identity mentions must not turn distinct checked products into one shared catalogue');
+  check('research uses exact checked candidate identity across differently worded page titles without rejecting read products or inventing aliases');
+
   for (const kind of ['courses', 'software', 'unpriced', 'starting']) {
     const result = await settle(await begin(`quality ${kind} frontier`));
     assert.equal(result.status, 'completed', result.error);
@@ -358,6 +410,13 @@ async function researchChecks({ rpc, navigate, waitFor, approve, send, tabSnapsh
     assert(fixtures.state.feedback.flatMap(feedback => feedback.issues).some(issue =>
       label === 'unchecked' ? issue.includes('directly read') : label === 'catalogue' ? issue.includes('specific observed') : issue.includes('failed native source checks')));
   }
+  const forgedIdentity = await settle(await begin('quality identities forged'));
+  assert.equal(forgedIdentity.status, 'noEvidence', forgedIdentity.error);
+  assert.equal(forgedIdentity.report, null);
+  assert.equal(fixtures.state.feedback.at(-1).attempt, 2);
+  assert(fixtures.state.feedback.flatMap(feedback => feedback.issues)
+    .some(issue => issue.includes('quote failed native source checks')),
+  'Native candidate identity must not drop or forgive explicit fabricated evidence');
   check('research refuses search-only rankings, shared generic catalogue buttons, and fabricated quotes in options/brief modes with bounded review and retained sources');
 
   const limited = await settle(await begin('quality products budget'));

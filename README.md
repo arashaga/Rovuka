@@ -226,6 +226,17 @@ Remaining roadmap work: bundled llama.cpp, browser-owned verified GGUF cache,
 Foundry Local discovery, local embeddings and constrained tool calls. Phase 1
 multi-role routing and usage metering also remain; page Q&A is implemented.
 
+## Model connection reliability
+
+Actor, reader and page-chat requests reuse cookie-free HTTP connection pools
+instead of creating a new client and repeating DNS/TLS setup for every model
+call. Cloud/default-proxy and loopback/no-proxy clients remain separate.
+Authentication, selected model, schema and trusted host clock are rebuilt for
+each request; API keys are not shared default headers. Redirects stay refused,
+connection timeout remains 15 seconds and connection errors stay explicit.
+This adds no automatic inference retry or task permission and cannot repair a
+genuine provider outage, failed cold DNS lookup or website challenge.
+
 ## Page questions versus web research
 
 **Ask this page** answers from the current page (when sharing is checked) or
@@ -805,12 +816,29 @@ Name matching tolerates an optional leading site namespace only when it matches
 a native destination hostname label and the remaining name is observed
 exactly. A page need not repeat its brand beside its product name; arbitrary
 brand/variant removal and fuzzy name matching are not allowed.
+Candidate identity and result destinations use the same checked proof, so a
+different page-title word order does not invalidate an exact name found in its
+checked body evidence. Verified price-component identity is bound to that
+quote's own source. When several sources mention a choice, an exact primary
+title, same-source verified price, or heading outranks a related-choice body
+mention; incidental recommendations do not turn distinct product pages into
+one shared catalogue. This ranking guides native correction/shared-target
+checks, not a requirement to replace an already valid explicit destination.
+Equally strong matching pages remain ambiguous for automatic correction.
 Already-read candidate pages can repair a destination even at the page limit;
 opening that source uses a null link ID, not a site's unrelated navigation link.
 Native code repairs an unrelated result link directly when a declared,
 source-checked quote identifies a unique matching candidate page already read.
 The correction is recorded in Activity; it adds no model round, URL authority,
 page read or permission. Ambiguous/shared catalogues still require evidence.
+Native progress separately lists unvisited navigation leads and checked
+already-read report destinations. A null link ID refers to a page in the
+report; it is never a `followLink` action. Completion review directs the model
+to correct names, quotes and destinations from existing evidence first rather
+than re-read a candidate. Its exact rejection and correction guidance remain
+visible in Activity. Search-only, empty, unsafe and moved-source observations
+do not supply these factual read-page references; normal navigation-loop and
+failed-route guards remain unchanged.
 Specific destinations become the primary action, and repeated catalogue targets
 cannot pass merely because the listing contains each product's heading.
 If an observed candidate exceeds the three-cross-site-redirect limit, its next
@@ -1443,9 +1471,9 @@ show either actual website content or a visible native failure, retaining the
 address. It does not solve site challenges, change settings or certify booking
 support. All browsers use disposable profiles and close normally.
 
-Current Windows verification: **137 workspace Rust tests and all 188 native
-regression groups pass**, preserving every one of the 179 published baseline
-groups and adding nine evidence-driven research groups. Memory unit tests cover storage,
+Current Windows verification: **143 workspace Rust tests and all 189 native
+regression groups pass**, preserving every one of the 188 published baseline
+groups exactly once and covering ten evidence-driven research groups. Memory unit tests cover storage,
 privacy/retention/consent/archive validation, single-owner/lazy settings and
 nonblocking capture-policy checks. The 16 scoped multi-tab, comparison and preserved-research
 groups cover trusted
@@ -1474,11 +1502,20 @@ Teams-certification quotes, a natively checked price for one choice and an
 explicit starting-price gap for the other. The fit caveats, direct destinations
 and source quotations were inspected, not just the completed status. This is
 one observed live result, not universal compatibility or market coverage.
+The recurring kids' bunk-bed request also completed on the final standard
+browser with the unchanged configured model: four reads, two distinct directly
+read Max and Lily products, exact quotations and native USD 449.49/799.49 item
+subtotals. The source links, dimensions, capacity and mattress-related caveats
+were inspected; promotional prices, tax, mattress cost, stock, delivery timing
+and unverified minimum-age/upper-bunk guidance remain explicit gaps, not
+guarantees. This repair unifies source-bound identity and report destinations,
+separates report references from navigation, and reuses model connections; it
+adds no bunk-bed/brand/merchant router or relaxed privacy/approval guard.
 The earlier Phase 6 Rust/Python Wikipedia request also completed with the
 configured live model, including an actual rejected-quote recovery, two
 source-bound rows, three criteria and preserved originals/new-tab source links.
 Phase 7's new regressions use local pages and mock models, not that historical
-live-model run; the nine research-quality groups are also controlled fixtures.
+live-model run; the ten research-quality groups are also controlled fixtures.
 Live model results can vary; this is not a guarantee of all
 future outputs.
 

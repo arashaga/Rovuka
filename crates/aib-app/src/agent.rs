@@ -79,11 +79,15 @@ For actionable options, include evidence from DIRECTLY READ pages identifying th
 Prefer {"sourceId":n,"quoteId":k,"quote":null} using that source's factualQuotes catalogue; native code
 retrieves its checked exact text. Never guess a quote ID or use one from another source. Literal
 {"sourceId":n,"quoteId":null,"quote":"exact text"} remains supported, but must not be paraphrased.
-Do not append an unobserved variant/version suffix to the option name merely to match the goal;
+Use an exact observed candidate name from its directly read title/heading or a checked quotation.
+Do not add an unobserved brand prefix or variant/version suffix to the option name merely to match the goal;
 put missing variant/compatibility evidence in gaps instead. Search snippets and a generic
 catalogue are discovery leads, not enough to recommend a specific variant. Do not manufacture prices.
 Use at most six option quotes, each at most 700 UTF-8 bytes. Supplied quotes are checked in every format.
 Native researchProgress lists previously observed links that remain available with their sourceId/linkId.
+Its readDestinations entries separately show report references for factual pages already read.
+Use their sourceId/linkId:null in report.destinations, never as a followLink action. Do not re-read
+a visited page just to fix its report destination. Its observed title is naming metadata, not proof of fit.
 Build a small candidate set, then investigate the actual candidates and requested criteria.
 For ACTIONABLE comparisons, budget for two distinct candidate-specific pages within the first four
 observations. Normally use one discovery search and at most one general reference/catalogue first;
@@ -92,12 +96,16 @@ General certification/vendor/catalogue pages do not replace specific candidate v
 If discovery lacks actual candidate links, make one targeted discovery refinement and then read them.
 Date-specific flight/hotel results from native travel tools count as candidate evidence.
 Follow useful earlier links directly; returning to a search page is unnecessary.
+Prefer unvisited availableLinks with searchLead:false for actual candidate/provider evidence.
+Do not spend another page on a search/shopping preview when those direct observed leads remain;
+a product-looking search preview is still discovery, not a directly read manufacturer/provider page.
 Spend the page budget gathering missing evidence, not rephrasing searches with useful leads still unread.
 Prefer a specific product/provider/publication page for each choice, not the same general listing for all.
 If a price is missing, inspect a relevant observed seller link when budget permits. A requested price
 or compatibility condition that remains unknown is a gap, not a satisfied condition or a winning claim.
 Native researchFeedback explains why a proposed finish lacks evidence or useful destinations.
-Respond by following a relevant observed link, refining discovery if needed, or reporting fewer supported
+First fix the names/quotes/destinations using existing evidence and exact observed names. Only if facts are
+missing, follow a new researchProgress.availableLinks lead or refine discovery; or report fewer supported
 choices with explicit gaps. Never repeat the same weak finish or replace observed evidence with memory.
 When budget is exhausted, a limited brief with no unsupported option cards is preferable to a false winner.
 Do not rely on the top-level sources list alone to associate evidence with an option.
@@ -2188,7 +2196,7 @@ impl Service {
                             if !issues.is_empty() {
                                 let feedback =
                                     research::feedback(&issues, MAX_STEPS - sources.len());
-                                self.step(id, "The proposed shortlist needs stronger source evidence or specific destinations. Unsupported option cards were not published.");
+                                self.step(id, format!("The proposed shortlist needs stronger source evidence or specific destinations. Unsupported option cards were not published.\n{feedback}"));
                                 if completion_reviews == research::MAX_COMPLETION_REVIEWS {
                                     self.no_evidence(id, format!("{feedback}\nThe bounded evidence-review attempts were exhausted. You can inspect the source trail or retry."));
                                     return Ok(());

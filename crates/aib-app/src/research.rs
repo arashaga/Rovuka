@@ -1,7 +1,8 @@
 //! Source-bound research progress and completion checks, independent of product or site names.
 
 use super::{
-    Report, ResultLink, Source, SupportingQuote, proposed_link, same_document, validate_navigation,
+    Report, ResearchOption, ResultLink, Source, SupportingQuote, proposed_link, same_document,
+    validate_navigation,
 };
 use crate::cdp::Observation;
 use anyhow::{Context, bail};
@@ -149,6 +150,14 @@ pub fn progress(
         "sourcesWithoutFacts": pages.iter().zip(sources).filter(|(page, _)| page.text.trim().is_empty())
             .map(|(_, source)| source.id).collect::<Vec<_>>(),
         "availableLinks": links,
+        "readDestinations": pages.iter().zip(sources).filter(|(page, source)| {
+            source.kind == "page" && page.url == source.url && !page.text.trim().is_empty()
+                && validate_navigation(&page.url).is_ok_and(|url| !crate::policy::requires_manual_handoff(&url))
+        }).map(|(page, source)| json!({
+            "sourceId": source.id, "observedTitle": page.title,
+            "destination": {"sourceId":source.id,"linkId":null,"label":"View source"},
+            "trust": "Untrusted page title. This is a report reference to a page already read, not a browser action, factual proof or new permission."
+        })).collect::<Vec<_>>(),
         "unavailableRoutes": unavailable_routes.iter().map(|route| json!({
             "targets": route.requested.iter().map(|url| crate::privacy::redact_url(url).text).collect::<Vec<_>>(),
             "reason": "The native cross-site redirect limit was reached. The next redirect was not opened and no candidate page was read.",
@@ -235,6 +244,72 @@ fn checked_quote<'a>(
     Ok(page)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CandidateIdentity {
+    Quote,
+    Heading,
+    VerifiedPrice,
+    Title,
+}
+
+fn candidate_identity(
+    page: &Observation,
+    proof: &SupportingQuote,
+    option: &ResearchOption,
+    name: &str,
+) -> Option<CandidateIdentity> {
+    if identifies_at(&page.url, &page.title, name) {
+        Some(CandidateIdentity::Title)
+    } else if option.offer.as_ref().is_some_and(|offer| {
+        offer.components.iter().any(|component| {
+            component.source_id == proof.source_id
+                && identifies(&component.name, name)
+                && identifies(&page.text, name)
+        })
+    }) {
+        Some(CandidateIdentity::VerifiedPrice)
+    } else if page
+        .headings
+        .iter()
+        .any(|heading| identifies_at(&page.url, heading, name))
+    {
+        Some(CandidateIdentity::Heading)
+    } else if identifies_at(&page.url, &proof.quote, name) {
+        Some(CandidateIdentity::Quote)
+    } else {
+        None
+    }
+}
+
+fn candidate_pages<'a>(
+    option: &ResearchOption,
+    pages: &'a [Observation],
+    checked: &[Observation],
+    sources: &[Source],
+) -> Vec<(usize, &'a Observation)> {
+    let names = subjects(&option.name);
+    let candidates: Vec<_> = option
+        .evidence
+        .iter()
+        .filter_map(|proof| {
+            let page = checked_quote(proof, &option.sources, pages, checked, sources).ok()?;
+            let identity = names
+                .iter()
+                .filter_map(|name| candidate_identity(page, proof, option, name))
+                .max()?;
+            Some((proof.source_id, page, identity))
+        })
+        .collect();
+    // A primary page identity outranks incidental mentions of related choices.
+    let strongest = candidates.iter().map(|(_, _, identity)| *identity).max();
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|(id, _, identity)| Some(*identity) == strongest && seen.insert(*id))
+        .map(|(id, page, _)| (id, page))
+        .collect()
+}
+
 pub fn resolve_quotes(
     report: &mut Report,
     checked: &[Observation],
@@ -301,9 +376,9 @@ pub fn quote_issues(
 
 fn named_destination(
     link: &ResultLink,
-    names: &[&str],
-    supporting: &[usize],
+    option: &ResearchOption,
     pages: &[Observation],
+    checked: &[Observation],
     sources: &[Source],
     routes: &[Route],
 ) -> bool {
@@ -311,7 +386,15 @@ fn named_destination(
         return false;
     }
     let target = landed_url(&link.url, routes);
-    sources.iter().any(|source| {
+    let names = subjects(&option.name);
+    option.evidence.iter().any(|proof| {
+        checked_quote(proof, &option.sources, pages, checked, sources).is_ok_and(|page| {
+            same_document(&page.url, target)
+                && names
+                    .iter()
+                    .any(|name| candidate_identity(page, proof, option, name).is_some())
+        })
+    }) || sources.iter().any(|source| {
         same_document(&source.url, target)
             && direct_page(source.id, pages, sources).is_some_and(|page| {
                 names.iter().any(|name| {
@@ -322,7 +405,7 @@ fn named_destination(
                             .any(|heading| identifies_at(&page.url, heading, name))
                 })
             })
-    }) || supporting.iter().any(|id| {
+    }) || option.sources.iter().any(|id| {
         direct_page(*id, pages, sources).is_some_and(|page| {
             page.links.iter().any(|observed| {
                 same_document(landed_url(&observed.url, routes), target)
@@ -347,27 +430,14 @@ fn named_targets(
         .enumerate()
         .flat_map(|(index, option)| {
             option.links.iter().filter_map(move |link| {
-                named_destination(
-                    link,
-                    &subjects(&option.name),
-                    &option.sources,
-                    pages,
-                    sources,
-                    routes,
-                )
-                .then(|| (index, landed_url(&link.url, routes).to_owned()))
+                named_destination(link, option, pages, checked, sources, routes)
+                    .then(|| (index, landed_url(&link.url, routes).to_owned()))
             })
         })
         .collect();
     for (index, option) in report.options.iter().enumerate() {
-        for proof in &option.evidence {
-            if let Ok(page) = checked_quote(proof, &option.sources, pages, checked, sources)
-                && subjects(&option.name)
-                    .iter()
-                    .any(|name| identifies_at(&page.url, &page.title, name))
-            {
-                targets.push((index, page.url.clone()));
-            }
+        for (_, page) in candidate_pages(option, pages, checked, sources) {
+            targets.push((index, page.url.clone()));
         }
     }
     targets
@@ -388,27 +458,25 @@ pub fn repair_destinations(
                 .iter()
                 .any(|(other, target)| *other != index && same_document(target, url))
         };
-        let names = subjects(&option.name);
         if option.links.iter().any(|link| {
-            named_destination(link, &names, &option.sources, pages, sources, routes)
+            named_destination(link, option, pages, checked, sources, routes)
                 && !shared(landed_url(&link.url, routes))
         }) {
             continue;
         }
-        let candidate = option.evidence.iter().find_map(|proof| {
-            checked_quote(proof, &option.sources, pages, checked, sources)
-                .ok()
-                .filter(|page| {
-                    names
-                        .iter()
-                        .any(|name| identifies_at(&page.url, &page.title, name))
-                        && !shared(&page.url)
-                        && validate_navigation(&page.url)
-                            .is_ok_and(|url| !crate::policy::requires_manual_handoff(&url))
-                })
-                .map(|page| (proof.source_id, page.url.clone()))
-        });
-        if let Some((source_id, url)) = candidate {
+        let mut candidates: Vec<(usize, &Observation)> = Vec::new();
+        for (source_id, page) in candidate_pages(option, pages, checked, sources) {
+            if !shared(&page.url)
+                && validate_navigation(&page.url)
+                    .is_ok_and(|url| !crate::policy::requires_manual_handoff(&url))
+                && !candidates
+                    .iter()
+                    .any(|(_, candidate)| same_document(&candidate.url, &page.url))
+            {
+                candidates.push((source_id, page));
+            }
+        }
+        if let [(source_id, page)] = candidates.as_slice() {
             let label = if report.intent == super::Intent::Shopping {
                 "View product page"
             } else {
@@ -416,8 +484,8 @@ pub fn repair_destinations(
             };
             let destination = ResultLink {
                 label: label.into(),
-                url,
-                source_id,
+                url: page.url.clone(),
+                source_id: *source_id,
                 visited: true,
                 kind: "page".into(),
             };
@@ -510,16 +578,9 @@ pub fn review(
         }
         let identified = !names.is_empty()
             && names.iter().all(|name| {
-                valid.iter().any(|(page, quote)| {
-                    identifies_at(&page.url, &quote.quote, name)
-                        || identifies_at(&page.url, &page.title, name)
-                }) || option.offer.as_ref().is_some_and(|offer| {
-                    offer.components.iter().any(|component| {
-                        identifies(&component.name, name)
-                            && direct_page(component.source_id, pages, sources)
-                                .is_some_and(|page| identifies(&page.text, name))
-                    })
-                })
+                valid
+                    .iter()
+                    .any(|(page, quote)| candidate_identity(page, quote, option, name).is_some())
             });
         if valid.is_empty() || !identified {
             let titles: Vec<_> = valid
@@ -547,17 +608,17 @@ pub fn review(
             {
                 return true;
             }
-            named_destination(link, &names, &option.sources, pages, sources, routes)
+            named_destination(link, option, pages, checked, sources, routes)
                 && !shared(landed_url(&link.url, routes))
         });
         if let Some(primary) = specific {
             option.links.swap(0, primary);
         } else {
-            let hint = valid.iter().find_map(|(page, quote)| {
-                (names.iter().any(|name| identifies_at(&page.url, &page.title, name)) && !shared(&page.url))
+            let hint = candidate_pages(option, pages, checked, sources).iter().find_map(|(source_id, page)| {
+                (!shared(&page.url))
                     .then(|| format!(
-                        " You already read a matching candidate page: use destination {{\"sourceId\":{},\"linkId\":null}} to open that page itself, not its header/navigation links.",
-                        quote.source_id
+                        " You already read a matching candidate page: reference it in report.destinations using {{\"sourceId\":{},\"linkId\":null}}, not its header/navigation links. This is a report correction, not a followLink action or another page read.",
+                        source_id
                     ))
             }).unwrap_or_default();
             issues.push(format!("\"{}\": establish a specific observed product/provider/publication destination. A repeated general catalogue or search-results link is not an actionable option.{hint}", option.name));
@@ -570,12 +631,12 @@ pub fn review(
 
 pub fn feedback(issues: &[String], remaining: usize) -> String {
     format!(
-        "Native evidence review did not accept the proposed shortlist:\n{}\n{}",
+        "Native evidence review did not accept the proposed shortlist:\n{}\nFirst correct names, quotes and destinations using already-read evidence. Use exact observed candidate names, not an added brand prefix or variant. researchProgress.readDestinations provides sourceId/linkId:null report references; null linkId is only for report.destinations, never followLink. Do not re-read a visited page to fix its destination or repeat a failed route. These references and titles do not prove fit or grant permission.\n{}",
         issues.join("\n"),
         if remaining > 0 {
-            "Use researchProgress.availableLinks with sourceId/linkId to read missing candidate evidence. Refine discovery only when needed. Or return fewer supported options with explicit gaps. No new permission was granted."
+            "Only if facts are genuinely missing, use researchProgress.availableLinks with sourceId/non-null linkId to read a new candidate within the remaining page budget. Refine discovery only when needed. Or return fewer supported options with explicit gaps. No new permission was granted."
         } else {
-            "The page budget is exhausted, but you can still correct a report using already-read evidence and destinations. For a specific candidate page already read, use its sourceId with linkId:null to open that page itself. Fix quotes/names/links from existing evidence first. Only when missing facts cannot be established, return a limited sourced brief with options empty and explicit gaps, or unable. Do not repeat unsupported recommendations."
+            "The page budget is exhausted, but you can still correct a report using already-read evidence and destinations. Fix quotes/names/links from existing evidence first. Only when missing facts cannot be established, return a limited sourced brief with options empty and explicit gaps, or unable. Do not repeat unsupported recommendations."
         }
     )
 }
@@ -842,6 +903,343 @@ mod tests {
             issues
                 .iter()
                 .all(|issue| issue.contains("specific observed"))
+        );
+    }
+
+    #[test]
+    fn progress_separates_checked_read_destinations_from_new_navigation() {
+        let pages = [
+            page(
+                "https://index.test/search",
+                "Discovery",
+                "A search lead.",
+                vec![],
+            ),
+            page(
+                "https://provider.test/candidate",
+                "Cedar Listening Device",
+                "Cedar Listening Device includes the requested features.",
+                vec![],
+            ),
+            page("https://provider.test/empty", "Empty source", "", vec![]),
+            page(
+                "https://provider.test/checkout",
+                "Manual payment",
+                "A checkout page.",
+                vec![],
+            ),
+            page(
+                "https://provider.test/moved",
+                "Moved source",
+                "Other facts.",
+                vec![],
+            ),
+        ];
+        let mut sources: Vec<_> = pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| Source {
+                id: index + 1,
+                title: page.title.clone(),
+                url: page.url.clone(),
+                kind: if index == 0 { "search" } else { "page" }.into(),
+            })
+            .collect();
+        sources[4].url = "https://provider.test/original".into();
+        let checklist = progress(&pages, &sources, &[], &[]);
+        assert_eq!(checklist["availableLinks"], json!([]));
+        let read = checklist["readDestinations"].as_array().unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0]["sourceId"], 2);
+        assert_eq!(read[0]["observedTitle"], pages[1].title);
+        assert_eq!(
+            read[0]["destination"],
+            json!({"sourceId":2,"linkId":null,"label":"View source"})
+        );
+        assert!(
+            read[0]["trust"]
+                .as_str()
+                .unwrap()
+                .contains("not a browser action")
+        );
+        for remaining in [0, 1] {
+            let instruction = feedback(
+                &["Correct the existing candidate destination.".into()],
+                remaining,
+            );
+            assert!(instruction.contains("already-read evidence"));
+            assert!(
+                instruction
+                    .contains("null linkId is only for report.destinations, never followLink")
+            );
+            assert!(instruction.contains("Do not re-read a visited page"));
+            assert!(instruction.contains(if remaining == 0 {
+                "page budget is exhausted"
+            } else {
+                "Only if facts are genuinely missing"
+            }));
+        }
+    }
+
+    #[test]
+    fn checked_candidate_names_in_page_content_do_not_require_identical_titles() {
+        for (name, title) in [
+            (
+                "Delta Children Convertible Twin Bunk Bed",
+                "Convertible Twin Bunk Bed with Ladder and Guardrails - Delta Children",
+            ),
+            (
+                "Cedar Works Listening Device",
+                "Listening Device with Noise Cancellation - Cedar Works",
+            ),
+            (
+                "Birch Academy Systems Course",
+                "Systems Course: Schedule and Curriculum",
+            ),
+        ] {
+            let quote = format!("{name} includes the requested features.");
+            let pages = [page(
+                "https://provider.test/candidate",
+                title,
+                &quote,
+                vec![Link {
+                    id: 1,
+                    name: "View all choices".into(),
+                    url: "https://provider.test/catalogue".into(),
+                }],
+            )];
+            let sources = [Source {
+                id: 1,
+                title: title.into(),
+                url: pages[0].url.clone(),
+                kind: "page".into(),
+            }];
+            let mut report: Report = serde_json::from_value(json!({
+                "intent":"general","title":"Checked choice","summary":"Snapshot",
+                "recommendedOption":0,"options":[{"name":name,"fit":"Observed features",
+                    "details":"Checked source text","tradeoffs":"Other criteria unknown","sources":[1],
+                    "evidence":[{"sourceId":1,"quote":quote}],
+                    "destinations":[{"sourceId":1,"linkId":null,"label":"View candidate"}]}],
+                "findings":[],"gaps":[]
+            })).unwrap();
+            report.resolve_destinations_with_routes(&pages, &sources, &[]);
+            let issues = review(&mut report, &pages, &pages, &sources, &[]);
+            assert!(issues.is_empty(), "{name}: {issues:?}");
+
+            report.options[0].destinations[0].link_id = Some(1);
+            report.resolve_destinations_with_routes(&pages, &sources, &[]);
+            let notes = repair_destinations(&mut report, &pages, &pages, &sources, &[]);
+            assert_eq!(notes.len(), 1, "{name}");
+            assert_eq!(report.options[0].links.len(), 1);
+            assert_eq!(report.options[0].links[0].url, pages[0].url);
+            assert!(review(&mut report, &pages, &pages, &sources, &[]).is_empty());
+
+            let additional = page("https://provider.test/reference", name, &quote, vec![]);
+            let expanded_pages = [pages[0].clone(), additional.clone()];
+            let expanded_sources = [
+                sources[0].clone(),
+                Source {
+                    id: 2,
+                    title: additional.title,
+                    url: additional.url,
+                    kind: "page".into(),
+                },
+            ];
+            let mut explicit = report.clone();
+            explicit.options[0].sources.push(2);
+            explicit.options[0].evidence.push(SupportingQuote {
+                source_id: 2,
+                quote: quote.clone(),
+                quote_id: None,
+            });
+            explicit.options[0].destinations[0].link_id = None;
+            explicit.resolve_destinations_with_routes(&expanded_pages, &expanded_sources, &[]);
+            let issues = review(
+                &mut explicit,
+                &expanded_pages,
+                &expanded_pages,
+                &expanded_sources,
+                &[],
+            );
+            assert!(
+                issues.is_empty(),
+                "{name}: explicit body-backed page {issues:?}"
+            );
+            assert!(
+                repair_destinations(
+                    &mut explicit,
+                    &expanded_pages,
+                    &expanded_pages,
+                    &expanded_sources,
+                    &[],
+                )
+                .is_empty(),
+                "A valid explicit destination must not be replaced by a higher-ranked reference page"
+            );
+
+            let mut invented = report.clone();
+            invented.options[0].name.push_str(" Imaginary Edition");
+            assert!(!review(&mut invented, &pages, &pages, &sources, &[]).is_empty());
+            let mut forged = report.clone();
+            forged.options[0].evidence[0].quote = "Invented features".into();
+            assert!(!review(&mut forged, &pages, &pages, &sources, &[]).is_empty());
+        }
+    }
+
+    #[test]
+    fn related_mentions_do_not_turn_distinct_primary_pages_into_a_shared_catalogue() {
+        let names = ["Cedar Listening Device", "Grove Listening Device"];
+        let quotes: Vec<_> = names
+            .iter()
+            .map(|name| format!("{name} includes the requested features."))
+            .collect();
+        let pages: Vec<_> = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let mut page = page(
+                    &format!("https://provider.test/{}", index + 1),
+                    name,
+                    &quotes.join("\n"),
+                    vec![Link {
+                        id: 1,
+                        name: "View all choices".into(),
+                        url: "https://provider.test/catalogue".into(),
+                    }],
+                );
+                page.headings.push(names[1 - index].into());
+                page
+            })
+            .collect();
+        let sources: Vec<_> = pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| Source {
+                id: index + 1,
+                title: page.title.clone(),
+                url: page.url.clone(),
+                kind: "page".into(),
+            })
+            .collect();
+        let mut report: Report = serde_json::from_value(json!({
+            "intent":"general","title":"Checked choices","summary":"Snapshot",
+            "recommendedOption":0,"options":names.iter().enumerate().map(|(index,name)| json!({
+                "name":name,"fit":"Observed features","details":"Primary and related mentions",
+                "tradeoffs":"Other criteria unknown","sources":[1,2],
+                "evidence":[{"sourceId":1,"quote":quotes[index]},{"sourceId":2,"quote":quotes[index]}],
+                "destinations":[{"sourceId":index+1,"linkId":null,"label":"View candidate"}]
+            })).collect::<Vec<_>>(),"findings":[],"gaps":[]
+        })).unwrap();
+        report.resolve_destinations_with_routes(&pages, &sources, &[]);
+        let issues = review(&mut report, &pages, &pages, &sources, &[]);
+        assert!(issues.is_empty(), "{issues:?}");
+        for option in &mut report.options {
+            option.destinations[0].link_id = Some(1);
+        }
+        report.resolve_destinations_with_routes(&pages, &sources, &[]);
+        assert_eq!(
+            repair_destinations(&mut report, &pages, &pages, &sources, &[]).len(),
+            2
+        );
+        for (index, option) in report.options.iter().enumerate() {
+            assert_eq!(option.links.len(), 1);
+            assert_eq!(option.links[0].url, pages[index].url);
+        }
+        assert!(review(&mut report, &pages, &pages, &sources, &[]).is_empty());
+    }
+
+    #[test]
+    fn verified_price_identity_can_resolve_its_own_page_not_another_source() {
+        let name = "Cedar Works Listening Device";
+        let quote = "The requested capability is supported.";
+        let pages = [
+            page(
+                "https://provider.test/candidate",
+                "Listening Device - Cedar Works",
+                &format!("{name}\n{quote}\nUSD 42.50"),
+                vec![],
+            ),
+            page(
+                "https://provider.test/unrelated",
+                "Other available choices",
+                quote,
+                vec![],
+            ),
+        ];
+        let sources: Vec<_> = pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| Source {
+                id: index + 1,
+                title: page.title.clone(),
+                url: page.url.clone(),
+                kind: "page".into(),
+            })
+            .collect();
+        let mut checked = pages.clone();
+        checked[0].text = quote.into();
+        let mut report: Report = serde_json::from_value(json!({
+            "intent":"shopping","title":"Checked choice","summary":"Snapshot",
+            "recommendedOption":0,"options":[{"name":name,"fit":"Observed features",
+                "details":"Checked source text","tradeoffs":"Other criteria unknown","sources":[1,2],
+                "evidence":[{"sourceId":1,"quote":quote},{"sourceId":2,"quote":quote}],
+                "offer":{"currency":"USD","basis":"itemTotal","scope":"One device",
+                    "exclusions":"Tax and stock unchecked","components":[{"kind":"product",
+                        "name":name,"detail":"One unit","unitAmountMinor":4250,"quantity":1,
+                        "sourceId":1,"quote":"USD 42.50"}]},
+                "destinations":[{"sourceId":1,"linkId":null,"label":"View candidate"}]}],
+            "findings":[],"gaps":[]
+        })).unwrap();
+        report.resolve_offers(&pages, &sources);
+        report.resolve_destinations_with_routes(&checked, &sources, &[]);
+        let issues = review(&mut report, &pages, &checked, &sources, &[]);
+        assert!(issues.is_empty(), "{issues:?}");
+        report.options[0].destinations[0].source_id = 2;
+        report.resolve_destinations_with_routes(&checked, &sources, &[]);
+        assert_eq!(
+            repair_destinations(&mut report, &pages, &checked, &sources, &[]).len(),
+            1
+        );
+        assert_eq!(report.options[0].links[0].source_id, 1);
+        assert_eq!(report.options[0].links[0].url, pages[0].url);
+    }
+
+    #[test]
+    fn destination_correction_does_not_guess_between_matching_read_pages() {
+        let name = "Cedar Listening Device";
+        let quote = format!("{name} includes the requested features.");
+        let pages = [
+            page("https://provider.test/first", name, &quote, vec![]),
+            page("https://provider.test/second", name, &quote, vec![]),
+        ];
+        let sources: Vec<_> = pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| Source {
+                id: index + 1,
+                title: page.title.clone(),
+                url: page.url.clone(),
+                kind: "page".into(),
+            })
+            .collect();
+        let mut report: Report = serde_json::from_value(json!({
+            "intent":"general","title":"Checked choice","summary":"Snapshot",
+            "recommendedOption":0,"options":[{"name":name,"fit":"Observed features",
+                "details":"Two matching sources","tradeoffs":"Variant not established","sources":[1,2],
+                "evidence":[{"sourceId":1,"quote":quote},{"sourceId":2,"quote":quote}]}],
+            "findings":[],"gaps":[]
+        })).unwrap();
+        report.options[0].links.push(ResultLink {
+            label: "View all choices".into(),
+            url: "https://provider.test/catalogue".into(),
+            source_id: 1,
+            visited: false,
+            kind: "link".into(),
+        });
+        assert!(repair_destinations(&mut report, &pages, &pages, &sources, &[]).is_empty());
+        assert_eq!(
+            report.options[0].links[0].url,
+            "https://provider.test/catalogue"
         );
     }
 

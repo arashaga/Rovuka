@@ -1074,10 +1074,10 @@ async function main() {
       const view = await rpc('/api/agent');
       return view && ['completed', 'failed', 'stopped', 'needsInput', 'noEvidence'].includes(view.status) && view;
     }, 'terminal task status', 40000);
-    const pending = () => waitFor(async () => {
+    const pending = previousApprovalId => waitFor(async () => {
       const view = await rpc('/api/agent');
       if (view?.status === 'failed') throw new Error(view.error);
-      return view?.pending && view;
+      return view?.pending && view.pending.id !== previousApprovalId && view;
     }, 'navigation proposal');
     const tabSnapshot = async () => {
       const state = await browserSocket.command('Runtime.evaluate', {
@@ -2528,15 +2528,30 @@ async function main() {
           view = await enter('/hotel-operator?slowSuggestions=1');
           await approve(view);
           await waitFor(async () => (await rpc('/api/agent')).steps.some(step => step.includes("Waiting for the website's destination")), 'native asynchronous suggestion wait');
+          await send({ type: 'setAssistantExpanded', expanded: false });
+          await send({ type: 'focusContent' });
+          await waitFor(() => evaluate(content, 'document.hasFocus()'),
+            'website has native focus before trusted takeover input');
+          const inputType = event === 'keyboard' ? 'keydown' : event === 'pointer' ? 'pointerdown' : 'wheel';
+          await evaluate(content, `(() => {
+            window.__agentTestTakeoverInput=null;
+            document.addEventListener(${JSON.stringify(inputType)},
+              input=>{window.__agentTestTakeoverInput={type:input.type,trusted:input.isTrusted}},
+              {once:true,capture:true});
+          })()`);
           if (event === 'keyboard') {
-            await content.command('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-            await content.command('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+            await content.command('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', text: 'a', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 });
+            await content.command('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 });
           } else if (event === 'wheel') {
             await content.command('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 10, y: 10, deltaX: 0, deltaY: 100 });
           } else {
             await content.command('Input.dispatchMouseEvent', { type: 'mousePressed', x: 10, y: 10, button: 'left', clickCount: 1 });
             await content.command('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 10, y: 10, button: 'left', clickCount: 1 });
           }
+          const deliveredInput = await waitFor(() => evaluate(content, 'window.__agentTestTakeoverInput'),
+            'trusted takeover event reaches the website document');
+          assert.deepEqual(deliveredInput,
+            { type: inputType, trusted: true }, 'Takeover input must reach the actual website as a trusted event');
           view = await terminal();
           assert.equal(view.status, 'stopped', view.error);
           assert.equal(view.actions.filter(action => action.status === 'executed').length, 1);
@@ -4367,8 +4382,10 @@ async function main() {
           stopVisible:bounds.top>=viewport.top && bounds.bottom<=viewport.bottom && button.contains(hit) };
       })()`, returnByValue: true });
       assert.deepEqual(layout.result.value, { noOverflow: true, sticky: true, stopVisible: true });
+      const searchApprovalId = view.pending.id;
       await assistant.command('Runtime.evaluate', { expression: 'document.querySelector(".task-approval .assistant-primary").click()' });
-      view = await pending();
+      view = await pending(searchApprovalId);
+      assert.equal(view.id, uiTaskId);
       assert.equal(view.pending.kind, 'link');
       await waitFor(async () => {
         const state = await assistant.command('Runtime.evaluate', { expression: 'document.querySelector(".task-approval h3")?.textContent==="Follow this link?"', returnByValue: true });

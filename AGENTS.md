@@ -8,6 +8,15 @@ After code changes, rebuild the standard `target\debug\rovuka.exe` the user
 launches (close a running Rovuka first, telling the user). Never leave a fix only
 in an alternate `--target-dir`; the diagnostic log's first line shows which build ran.
 
+Model HTTP requests reuse a bounded pair of cookie-free clients in `aib-models`:
+cloud/default-proxy and loopback/no-proxy. Do not rebuild a client for every
+actor/reader request or put authentication in shared default headers. Headers,
+model, prompt, schema and trusted clock context belong to each fresh request.
+Preserve the 15-second connection timeout, refused redirects and explicit
+build/connect/cache errors. Pooling adds no application-level inference retry,
+permission or task resumption. Test one keep-alive connection across changed
+keys and a keyless request, and verify a redirect target receives no request.
+
 Agent decisions use the strict schema in `crates/aib-app/src/protocol.rs`; change
 the Rust types, `decision_schema()` and `INSTRUCTION` together. Travel URLs (`tfs`,
 `ts`) are undocumented Google formats pinned by unit tests: after changing them,
@@ -44,6 +53,11 @@ synthetic element.click() calls.
 Trusted fixture clicks must wait for an enabled, in-viewport hit target with
 stable geometry before dispatching pointer input; approval smooth scrolling and
 responsive reflow must not redirect clicks to a different action.
+UI continuation checks must wait for a new native approval ID after an async
+click rather than accepting the previous pending proposal. Trusted webpage
+keyboard tests must verify native content focus, not merely a CDP target.
+Require an actual trusted event in the website document before expecting
+takeover; browser-consumed Escape and deferred wheel delivery are not proof.
 
 Hotels.com preparation uses the native `hotel_search.rs` contract and typed
 `hotelSearch` payload, not arbitrary form submission. Keep the native scope
@@ -98,6 +112,15 @@ report validation, UI output and archival; unresolved references cannot be store
 Keep legacy exact text quotes compatible, without fuzzy acceptance.
 Named-choice identity may use a leading exact native hostname namespace plus an
 observed exact name. Never strip arbitrary brands or invented variant suffixes.
+Use the same source-bound identity proof for candidate and destination review.
+Rank exact native primary-title, same-source verified-price, heading and checked
+body-quote identity in that order for candidate destinations: related-product
+mentions must not make distinct primary pages a shared catalogue. Equally
+strong distinct read URLs remain ambiguous; do not pick the first match.
+This ranking must not invalidate or replace a valid explicit source-backed
+destination merely because another reference page has a more similar title.
+Price-component identity must belong to the checked quote's source, not another
+declared source. Checked quotes still prove provenance, not semantic suitability.
 Preserve the reviewed travel-result-page exception and native price sorting.
 Do not accept shared catalogue targets just because product headings occur on
 the listing. Promote a specific destination over unrelated navigation links.
@@ -105,6 +128,13 @@ Budget exhaustion still permits report-only corrections using existing native
 source IDs and null link IDs; never instruct the model to discard already-read
 candidate evidence. Starting/from prices are not exact variant totals; check
 the protected source context even when the proposed quote strips the qualifier.
+Separate `researchProgress.readDestinations` report references from unvisited
+`availableLinks` navigation. Emit only directly read factual, safe, unchanged
+source observations. Null link IDs belong only to report destinations, never
+`followLink`. At any remaining-page count, first repair names/quotes/links using
+existing exact evidence; navigate only for genuinely missing facts. Preserve
+the loop guard and bounded protocol correction. Show the native review reason
+and guidance in Activity, without briefly publishing rejected recommendations.
 Repair unrelated destination links from unique, checked, declared candidate
 sources without another model round; record the native correction in Activity.
 Count other options' matching candidate sources as shared targets before repair,
